@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>3vor Fetch</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    * { font-family: 'Inter', sans-serif; }
+
+    body {
+      background: linear-gradient(135deg, #0a0c14 0%, #0f1117 50%, #0d1020 100%);
+      min-height: 100vh;
+      color: #e2e8f0;
+    }
+
+    /* ── Header ── */
+    .hero-title {
+      font-size: 2.4rem; font-weight: 700;
+      background: linear-gradient(90deg, #c084fc, #818cf8);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+
+    /* ── Input panel ── */
+    .card-panel {
+      background: linear-gradient(145deg, #1a1d27, #161822);
+      border: 1px solid #2d3148; border-radius: 16px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+    textarea {
+      background-color: #0f1117 !important; color: #e2e8f0 !important;
+      border: 1px solid #374151 !important; border-radius: 10px !important;
+      resize: vertical; font-size: 0.95rem; line-height: 1.7;
+    }
+    textarea:focus {
+      border-color: #7c3aed !important;
+      box-shadow: 0 0 0 3px rgba(124,58,237,0.2) !important; outline: none !important;
+    }
+
+    /* ── Buttons ── */
+    .btn-search {
+      background: linear-gradient(135deg, #7c3aed, #6d28d9); color: white;
+      border: none; border-radius: 10px; padding: 10px 24px; font-weight: 600;
+      transition: all 0.2s;
+    }
+    .btn-search:hover { background: linear-gradient(135deg, #6d28d9, #5b21b6); color: white; transform: translateY(-1px); }
+    .btn-search:disabled { opacity: 0.6; transform: none; }
+    .btn-clear {
+      background-color: #1f2937; color: #9ca3af; border: 1px solid #374151;
+      border-radius: 10px; padding: 10px 20px; transition: all 0.2s;
+    }
+    .btn-clear:hover { background-color: #374151; color: #e2e8f0; }
+    .btn-download {
+      background: linear-gradient(135deg, #064e3b, #065f46); color: #4ade80;
+      border: 1px solid #065f46; border-radius: 10px; padding: 10px 20px; font-weight: 600;
+      transition: all 0.2s;
+    }
+    .btn-download:hover { background: linear-gradient(135deg, #065f46, #047857); color: #4ade80; transform: translateY(-1px); }
+
+    /* ── Loading ── */
+    .spinner-ring {
+      display: inline-block; width: 20px; height: 20px;
+      border: 3px solid #374151; border-top-color: #c084fc;
+      border-radius: 50%; animation: spin 0.8s linear infinite;
+      vertical-align: middle; margin-right: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-bar {
+      height: 3px;
+      background: linear-gradient(90deg, #7c3aed, #c084fc, #818cf8, #7c3aed);
+      background-size: 200% 100%; animation: shimmer 1.5s linear infinite; border-radius: 2px;
+    }
+    @keyframes shimmer { to { background-position: -200% 0; } }
+
+    /* ── Summary badges ── */
+    .timer-badge {
+      display: inline-block; background: #1a1d27; border: 1px solid #2d3148;
+      border-radius: 20px; padding: 6px 16px; font-size: 0.82rem; color: #94a3b8;
+    }
+    .timer-badge span { color: #c084fc; font-weight: 600; }
+    .stat-badge {
+      background: #1a1d27; border: 1px solid #2d3148; border-radius: 10px;
+      padding: 10px 18px; font-size: 0.82rem; color: #64748b;
+    }
+    .stat-badge strong { color: #c084fc; font-size: 1.1rem; }
+    .error-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: #1f0f0f; border: 1px solid #7f1d1d;
+      border-radius: 20px; padding: 5px 12px; font-size: 0.78rem; color: #f87171;
+      cursor: pointer; transition: background 0.15s;
+    }
+    .error-chip:hover { background: #2d1010; }
+
+    /* ── Results table ── */
+    .results-table {
+      background: #0f1117; border-radius: 12px; overflow: hidden; border: 1px solid #2d3148;
+    }
+    .results-table thead th {
+      background: linear-gradient(135deg, #1a1d27, #1e2130); color: #c084fc;
+      font-weight: 600; font-size: 0.8rem; text-transform: uppercase;
+      letter-spacing: 0.05em; border-color: #2d3148 !important; padding: 13px 14px;
+      white-space: nowrap;
+    }
+    .results-table tbody tr { border-color: #1f2333 !important; transition: background 0.12s; }
+    .results-table tbody tr:hover { background-color: #1a1d27 !important; }
+    .results-table td {
+      border-color: #1f2333 !important; color: #cbd5e1; padding: 10px 14px;
+      vertical-align: middle; background: transparent !important; font-size: 0.88rem;
+    }
+
+    /* ── Cell colours ── */
+    .col-card  { color: #e2e8f0; font-weight: 600; }
+    .col-store { color: #818cf8; }
+    .col-print { color: #64748b; font-size: 0.82rem; }
+    .col-price { color: #4ade80 !important; font-weight: 700; }
+    .col-quality { color: #94a3b8; font-size: 0.82rem; }
+
+    /* Ranks */
+    .rank-1 { color: #facc15 !important; font-weight: 700; }
+    .rank-2 { color: #94a3b8 !important; font-weight: 600; }
+    .rank-3 { color: #cd7c3a !important; font-weight: 600; }
+
+    /* Hidden (rank > 5) rows — revealed by toggle button, slightly dimmed */
+    .row-extra td { opacity: 0.72; }
+
+    /* Error / no-results rows */
+    .row-error td { background: #140808 !important; }
+    .row-error .col-card { color: #94a3b8; }
+    .row-error td:nth-child(4) { color: #f87171; font-style: italic; }
+
+    /* Foil badge */
+    .foil-badge {
+      display: inline-block; background: linear-gradient(135deg, #4c1d95, #6d28d9);
+      color: #ddd6fe; font-size: 0.72rem; font-weight: 600;
+      padding: 2px 7px; border-radius: 10px; white-space: nowrap;
+    }
+
+    /* Listing name link */
+    .listing-link {
+      color: #60a5fa; text-decoration: none;
+      transition: color 0.15s;
+    }
+    .listing-link:hover { color: #93c5fd; text-decoration: underline; }
+
+    /* Toggle-more row */
+    .toggle-row td {
+      padding: 6px 14px !important; border-top: 1px dashed #2d3148 !important;
+    }
+    .btn-toggle {
+      background: none; border: 1px solid #2d3148; border-radius: 8px;
+      color: #64748b; font-size: 0.78rem; padding: 4px 14px;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .btn-toggle:hover { border-color: #818cf8; color: #818cf8; }
+    .btn-toggle.expanded { color: #94a3b8; border-color: #374151; }
+
+    /* Error modal */
+    .error-box { background: #1f0f0f; border: 1px solid #7f1d1d; border-radius: 10px; color: #f87171; padding: 12px 16px; }
+    .section-divider { border: none; border-top: 1px solid #1f2333; margin: 24px 0; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0f1117; }
+    ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+  </style>
+</head>
+<body>
+<div class="container py-5" style="max-width: 1200px;">
+
+  <!-- Header -->
+  <div class="text-center mb-5">
+    <div style="font-size:3rem; margin-bottom:8px;">🦕</div>
+    <h1 class="hero-title mb-2">3vor Fetch</h1>
+    <p style="color:#64748b; font-size:0.95rem;">
+      Direct pricing across all Singapore LGS — no gishathfetch.com dependency
+    </p>
+  </div>
+
+  <!-- Input Panel -->
+  <div class="card-panel p-4 mb-4">
+    <label class="mb-2 d-block" style="color:#94a3b8; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.05em; font-weight:600;">
+      Card buy list <span style="color:#4b5563; font-weight:400;">(one name per line, min 3 characters)</span>
+    </label>
+    <textarea id="cardInput" class="form-control mb-3" rows="7"
+      placeholder="Ancient Copper Dragon&#10;Gishath, Sun's Avatar&#10;Atraxa, Praetors' Voice&#10;The One Ring&#10;Mana Crypt"></textarea>
+
+    <div class="d-flex gap-2 flex-wrap align-items-center">
+      <button class="btn btn-search" id="searchBtn" onclick="runSearch()">🔍 Search</button>
+      <button class="btn btn-clear" onclick="clearAll()">✕ Clear</button>
+      <button class="btn btn-download d-none" id="downloadBtn" onclick="downloadExcel()">⬇ Download Excel</button>
+    </div>
+
+    <!-- Loading -->
+    <div id="loading" class="mt-3 d-none">
+      <div class="loading-bar mb-2"></div>
+      <div style="color:#94a3b8; font-size:0.9rem;">
+        <span class="spinner-ring"></span>Querying all stores — up to 30 s per card…
+      </div>
+    </div>
+
+    <!-- Error -->
+    <div id="error-msg" class="error-box mt-3 d-none"></div>
+
+    <!-- Summary -->
+    <div id="search-summary" class="d-none mt-3">
+      <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+        <div class="timer-badge">⏱ Completed in <span id="elapsed-time"></span>s</div>
+        <div class="stat-badge">🃏 <strong id="stat-cards">0</strong> cards</div>
+        <div class="stat-badge">📋 <strong id="stat-listings">0</strong> listings</div>
+        <div class="stat-badge" id="stat-stores-ok-wrap">🏪 <strong id="stat-stores-ok">0</strong> stores</div>
+      </div>
+      <!-- Store error chips -->
+      <div id="store-error-chips" class="d-flex flex-wrap gap-2"></div>
+      <!-- Skipped cards -->
+      <div id="skipped-notice" class="d-none mt-2" style="color:#f87171; font-size:0.82rem;"></div>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div id="resultsSection" class="d-none">
+    <hr class="section-divider">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h6 style="color:#64748b; text-transform:uppercase; letter-spacing:0.08em; font-size:0.78rem; margin:0;">Search Results</h6>
+      <span style="color:#4b5563; font-size:0.78rem;">Sorted by price · top 5 highlighted</span>
+    </div>
+    <div class="table-responsive results-table">
+      <table class="table table-borderless mb-0" id="resultsTable">
+        <thead>
+          <tr>
+            <th style="min-width:140px;">Card</th>
+            <th style="min-width:52px;">Rank</th>
+            <th style="min-width:140px;">Store</th>
+            <th style="min-width:200px;">Listing Name</th>
+            <th style="min-width:160px;">Set / Printing</th>
+            <th style="min-width:52px;">Foil</th>
+            <th style="min-width:64px;">Quality</th>
+            <th style="min-width:90px;">Price</th>
+          </tr>
+        </thead>
+        <tbody id="resultsBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<!-- Store error detail modal (lightweight) -->
+<div id="errorModal" class="d-none" style="
+  position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:1000;
+  display:flex; align-items:center; justify-content:center;" onclick="closeModal()">
+  <div style="background:#1a1d27; border:1px solid #2d3148; border-radius:16px;
+    padding:24px; max-width:560px; width:90%; max-height:80vh; overflow-y:auto;"
+    onclick="event.stopPropagation()">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h6 style="color:#c084fc; margin:0; font-weight:600;">Store Errors</h6>
+      <button onclick="closeModal()" style="background:none;border:none;color:#64748b;font-size:1.2rem;cursor:pointer;">✕</button>
+    </div>
+    <div id="modalContent"></div>
+  </div>
+</div>
+
+<script>
+  let lastResults = [];
+  let storeErrorDetails = [];
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
+  function esc(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // ── Search ────────────────────────────────────────────────────────────────
+  async function runSearch() {
+    const input = document.getElementById("cardInput").value.trim();
+    if (!input) return;
+
+    const buyList = input.split("\n").map(s => s.trim()).filter(Boolean);
+    const btn = document.getElementById("searchBtn");
+
+    btn.disabled = true;
+    document.getElementById("loading").classList.remove("d-none");
+    document.getElementById("error-msg").classList.add("d-none");
+    document.getElementById("search-summary").classList.add("d-none");
+    document.getElementById("resultsSection").classList.add("d-none");
+    document.getElementById("downloadBtn").classList.add("d-none");
+
+    try {
+      const resp = await fetch("/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ buy_list: buyList }),
+      });
+
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body.error || `Server error ${resp.status}`);
+      }
+
+      const data = await resp.json();
+      lastResults = data.results;
+      storeErrorDetails = data.store_errors || [];
+
+      renderResults(lastResults);
+      renderSummary(data);
+
+    } catch (err) {
+      const el = document.getElementById("error-msg");
+      el.textContent = "❌ " + err.message;
+      el.classList.remove("d-none");
+    } finally {
+      document.getElementById("loading").classList.add("d-none");
+      btn.disabled = false;
+    }
+  }
+
+  // ── Render summary ────────────────────────────────────────────────────────
+  function renderSummary(data) {
+    const results  = data.results || [];
+    const errors   = data.store_errors || [];
+    const skipped  = data.skipped || [];
+
+    const uniqueCards    = new Set(results.filter(r => !r.is_error).map(r => r.card)).size;
+    const totalListings  = results.filter(r => !r.is_error).length;
+
+    document.getElementById("elapsed-time").textContent = data.elapsed;
+    document.getElementById("stat-cards").textContent    = uniqueCards;
+    document.getElementById("stat-listings").textContent = totalListings;
+
+    // Only count real failures — "no results" is OOS/no token, not a scraper error
+    const realErrCount = errors.filter(e => e.error && e.error !== "no results").length;
+    document.getElementById("stat-stores-ok").textContent = realErrCount > 0 ? `${realErrCount} errors` : "all OK";
+    const storeOkEl = document.getElementById("stat-stores-ok-wrap");
+    storeOkEl.style.color = realErrCount > 0 ? "#f87171" : "#64748b";
+
+    // Error chips
+    const chipsEl = document.getElementById("store-error-chips");
+    chipsEl.innerHTML = "";
+    // Only show chips for real failures — suppress "no results" (genuine OOS / no token)
+    const realErrors = errors.filter(e => e.error && e.error !== "no results");
+    realErrors.forEach((e, i) => {
+      const chip = document.createElement("span");
+      chip.className = "error-chip";
+      chip.title = e.error;
+      chip.innerHTML = `⚠ ${esc(e.store)}`;
+      chip.onclick = () => showErrors();
+      chipsEl.appendChild(chip);
+    });
+
+    // Skipped notice
+    const skipEl = document.getElementById("skipped-notice");
+    if (skipped.length > 0) {
+      skipEl.textContent = `⚠ Skipped (too short): ${skipped.join(", ")}`;
+      skipEl.classList.remove("d-none");
+    } else {
+      skipEl.classList.add("d-none");
+    }
+
+    document.getElementById("search-summary").classList.remove("d-none");
+    document.getElementById("downloadBtn").classList.remove("d-none");
+  }
+
+  // ── Render results table ──────────────────────────────────────────────────
+  function renderResults(results) {
+    const tbody = document.getElementById("resultsBody");
+    tbody.innerHTML = "";
+
+    // Group rows by card name (maintaining input order)
+    const groups = new Map();
+    for (const row of results) {
+      if (!groups.has(row.card)) groups.set(row.card, []);
+      groups.get(row.card).push(row);
+    }
+
+    let groupIdx = 0;
+    for (const [cardName, rows] of groups) {
+      const visible = rows.filter(r => !r.hidden);
+      const hidden  = rows.filter(r => r.hidden);
+      const gId = `g${groupIdx++}`;
+
+      // Render top-5 (or fewer) rows at full opacity
+      for (const row of visible) {
+        tbody.appendChild(buildRow(row));
+      }
+
+      if (hidden.length > 0) {
+        // Toggle button row — sits between visible and hidden rows
+        const toggleTr = document.createElement("tr");
+        toggleTr.className = "toggle-row";
+        toggleTr.innerHTML = `<td colspan="8">
+          <button class="btn-toggle" data-gid="${gId}" data-count="${hidden.length}" onclick="toggleGroup(this)">
+            ▼ Show ${hidden.length} more
+          </button>
+        </td>`;
+        tbody.appendChild(toggleTr);
+
+        // Hidden rows — pre-rendered but collapsed; revealed on toggle
+        for (const row of hidden) {
+          const tr = buildRow(row);
+          tr.classList.add("row-extra", `hrows-${gId}`);
+          tr.style.display = "none";
+          tbody.appendChild(tr);
+        }
+      }
+    }
+
+    document.getElementById("resultsSection").classList.remove("d-none");
+  }
+
+  function toggleGroup(btn) {
+    const gId    = btn.dataset.gid;
+    const count  = btn.dataset.count;
+    const rows   = document.querySelectorAll(`.hrows-${gId}`);
+    const expanded = btn.classList.contains("expanded");
+
+    rows.forEach(tr => { tr.style.display = expanded ? "none" : ""; });
+
+    if (expanded) {
+      btn.classList.remove("expanded");
+      btn.textContent = `▼ Show ${count} more`;
+    } else {
+      btn.classList.add("expanded");
+      btn.textContent = `▲ Show less`;
+    }
+  }
+
+  function buildRow(row) {
+    const tr = document.createElement("tr");
+    if (row.is_error) tr.classList.add("row-error");
+
+    const rankClass = row.rank_n === 1 ? "rank-1" : row.rank_n === 2 ? "rank-2" : row.rank_n === 3 ? "rank-3" : "";
+    const foilCell  = row.foil ? '<span class="foil-badge">✦ Foil</span>' : '';
+    const nameCell  = row.url
+      ? `<a href="${esc(row.url)}" target="_blank" rel="noopener" class="listing-link">${esc(row.name)}</a>`
+      : `<span>${esc(row.name)}</span>`;
+
+    tr.innerHTML = `
+      <td class="col-card">${esc(row.card)}</td>
+      <td class="${rankClass}">${esc(row.rank)}</td>
+      <td class="col-store">${esc(row.src)}</td>
+      <td>${nameCell}</td>
+      <td class="col-print">${esc(row.extra_info)}</td>
+      <td>${foilCell}</td>
+      <td class="col-quality">${esc(row.quality)}</td>
+      <td class="col-price">${esc(row.price)}</td>
+    `;
+    return tr;
+  }
+
+  // ── Store errors modal ────────────────────────────────────────────────────
+  function showErrors() {
+    const modal   = document.getElementById("errorModal");
+    const content = document.getElementById("modalContent");
+    content.innerHTML = storeErrorDetails.map(e => `
+      <div class="mb-3">
+        <div style="color:#818cf8; font-weight:600; margin-bottom:4px;">${esc(e.store)}</div>
+        <div style="color:#94a3b8; font-size:0.82rem; word-break:break-all;">${esc(e.error)}</div>
+      </div>`).join('<hr style="border-color:#1f2333;">');
+    modal.style.display = "flex";
+    modal.classList.remove("d-none");
+  }
+
+  function closeModal() {
+    const modal = document.getElementById("errorModal");
+    modal.style.display = "none";
+  }
+
+  document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
+
+  // ── Download ──────────────────────────────────────────────────────────────
+  async function downloadExcel() {
+    try {
+      const resp = await fetch("/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ results: lastResults }),
+      });
+      if (!resp.ok) throw new Error("Download failed");
+      const blob = await resp.blob();
+      const url  = window.URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href = url; a.download = "gishath_results.xlsx"; a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      alert("Download failed: " + err.message);
+    }
+  }
+
+  // ── Clear ─────────────────────────────────────────────────────────────────
+  function clearAll() {
+    document.getElementById("cardInput").value = "";
+    document.getElementById("resultsSection").classList.add("d-none");
+    document.getElementById("downloadBtn").classList.add("d-none");
+    document.getElementById("search-summary").classList.add("d-none");
+    document.getElementById("error-msg").classList.add("d-none");
+    lastResults = []; storeErrorDetails = [];
+  }
+
+  // Ctrl+Enter to search
+  document.getElementById("cardInput").addEventListener("keydown", e => {
+    if (e.ctrlKey && e.key === "Enter") runSearch();
+  });
+</script>
+</body>
+</html>

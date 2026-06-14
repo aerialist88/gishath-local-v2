@@ -1,0 +1,11 @@
+bin/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.xlsx
+.DS_Store
+logs/
+server.log
+*.db
