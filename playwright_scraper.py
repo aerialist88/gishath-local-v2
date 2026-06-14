@@ -40,6 +40,7 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 from curl_cffi import requests as cffi_requests
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 log = logging.getLogger(__name__)
 
@@ -89,12 +90,6 @@ BINDERPOS_STORES: list[StoreConfig] = [
     StoreConfig(
         name="Card Affinity",
         base_url="https://card-affinity.com",   # domain changed from www.cardaffinity.com
-        search_path="/search?q={q}",
-        variant=2,
-    ),
-    StoreConfig(
-        name="Cardboard Crack Games",
-        base_url="https://www.cardboardcrackgames.com",
         search_path="/search?q={q}",
         variant=2,
     ),
@@ -154,9 +149,11 @@ _loop: Optional[asyncio.AbstractEventLoop] = None
 _loop_thread: Optional[threading.Thread] = None
 _MAX_CONCURRENT_PAGES = 10
 _semaphore: Optional[asyncio.Semaphore] = None
+_browser_lock: Optional[asyncio.Lock] = None  # guards relaunch — created lazily on the playwright loop
 
 PAGE_TIMEOUT = 20_000   # ms — per-page navigation timeout
 WAIT_SELECTOR_TIMEOUT = 5_000  # ms — wait for results selector (shorter = faster failure on no-results pages)
+GOTO_ATTEMPTS = 2       # total attempts (1 retry) for page.goto on transient timeouts
 
 
 def start_browser() -> None:
@@ -229,6 +226,33 @@ async def _close_browser() -> None:
         except Exception:
             pass
         _playwright_ctx = None
+
+
+async def _ensure_browser_healthy() -> None:
+    """Detect a crashed/disconnected Chromium and relaunch it in place.
+
+    Called at the top of every Playwright scrape path. Cheap no-op when the
+    browser is alive (Playwright's is_connected() is a local flag check, no
+    IPC round-trip). Guarded by a lock so concurrent searches don't each try
+    to relaunch — only the first one in does the work; the rest just wait for
+    it to finish and proceed with the now-healthy _browser.
+    """
+    global _browser_lock
+
+    if _browser is not None and _browser.is_connected():
+        return
+
+    if _browser_lock is None:
+        _browser_lock = asyncio.Lock()
+
+    async with _browser_lock:
+        # Re-check after acquiring the lock — another task may have already relaunched.
+        if _browser is not None and _browser.is_connected():
+            return
+        log.warning("Chromium relaunch — browser was %s", "missing" if _browser is None else "disconnected")
+        await _close_browser()
+        await _init_browser()
+        log.info("Chromium relaunched and ready.")
 
 
 # ── Stealth page factory ──────────────────────────────────────────────────────
@@ -630,78 +654,99 @@ def _make_card(raw: dict, store: StoreConfig) -> dict | None:
 
 
 async def _scrape_with_playwright(store: StoreConfig, card_name: str) -> list[dict]:
-    """Open one Playwright browser page, navigate, extract cards via JS evaluator.
+    """Open a Playwright browser page, navigate, extract cards via JS evaluator.
 
     This is the fallback path used when curl_cffi detects a Cloudflare challenge
     or fails to fetch the page.  Playwright presents a real Chromium fingerprint
     and can solve JS challenges that curl_cffi cannot.
+
+    A crashed/disconnected Chromium is relaunched automatically via
+    _ensure_browser_healthy(). A page.goto() timeout (transient network/site
+    blip) gets GOTO_ATTEMPTS total tries with a fresh page each time before
+    giving up — a selector-not-found after a successful goto is NOT retried,
+    since that's a genuine empty/CF/structure-change result, not a fluke.
     """
-    if _browser is None:
-        raise RuntimeError("Browser not initialised.")
+    await _ensure_browser_healthy()
 
     url = store.search_url(card_name)
     js  = {1: _JS_VARIANT1, 2: _JS_VARIANT2, 3: _JS_VARIANT3}[store.variant]
+    wait_sel = {
+        1: "div.Norm",
+        2: "[data-product-variants]",
+        3: "div.productCard__card",
+    }[store.variant]
 
     async with _semaphore:
-        page = await _new_stealth_page()
-        try:
-            # Block heavy assets to speed up scraping
-            await page.route(
-                "**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,ttf,eot,otf}",
-                lambda route: route.abort(),
-            )
-            await page.goto(url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
-
-            # Wait for at least one relevant element to appear (or timeout silently)
-            wait_sel = {
-                1: "div.Norm",
-                2: "[data-product-variants]",
-                3: "div.productCard__card",
-            }[store.variant]
+        for attempt in range(1, GOTO_ATTEMPTS + 1):
+            page = await _new_stealth_page()
             try:
-                await page.wait_for_selector(wait_sel, timeout=WAIT_SELECTOR_TIMEOUT)
-            except Exception:
-                # Selector not found — could be: CF challenge, genuine no-results, or
-                # page structure change.  Capture title + body snippet to tell them apart.
-                try:
-                    page_title   = await page.title()
-                    page_snippet = (await page.inner_text("body"))[:400].replace("\n", " ").strip()
-                except Exception:
-                    page_title   = "<could not read title>"
-                    page_snippet = "<could not read body>"
-                log.warning(
-                    "[%s] Playwright: selector '%s' not found for '%s'\n"
-                    "  page title   : %s\n"
-                    "  body snippet : %s",
-                    store.name, wait_sel, card_name, page_title, page_snippet,
+                # Block heavy assets to speed up scraping
+                await page.route(
+                    "**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,ttf,eot,otf}",
+                    lambda route: route.abort(),
                 )
-                return []
+                try:
+                    await page.goto(url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+                except PlaywrightTimeoutError as exc:
+                    if attempt < GOTO_ATTEMPTS:
+                        log.warning(
+                            "[%s] goto timeout for '%s' (attempt %d/%d) — retrying with a fresh page",
+                            store.name, card_name, attempt, GOTO_ATTEMPTS,
+                        )
+                        continue
+                    log.warning("[%s] Playwright error scraping '%s': %s", store.name, card_name, exc)
+                    raise
 
-            raw_list: list[dict] = await page.evaluate(js)
-            log.debug("[%s] Playwright parsed %d raw items for '%s'", store.name, len(raw_list), card_name)
+                # Wait for at least one relevant element to appear (or timeout silently)
+                try:
+                    await page.wait_for_selector(wait_sel, timeout=WAIT_SELECTOR_TIMEOUT)
+                except Exception:
+                    # Selector not found — could be: CF challenge, genuine no-results, or
+                    # page structure change.  Capture title + body snippet to tell them apart.
+                    try:
+                        page_title   = await page.title()
+                        page_snippet = (await page.inner_text("body"))[:400].replace("\n", " ").strip()
+                    except Exception:
+                        page_title   = "<could not read title>"
+                        page_snippet = "<could not read body>"
+                    log.warning(
+                        "[%s] Playwright: selector '%s' not found for '%s'\n"
+                        "  page title   : %s\n"
+                        "  body snippet : %s",
+                        store.name, wait_sel, card_name, page_title, page_snippet,
+                    )
+                    return []
 
-            cards = []
-            for raw in raw_list:
-                card = _make_card(raw, store)
-                if card is None:
-                    continue
-                # Filter: only keep results that contain the search term
-                if not _name_matches(card_name, card["name"]):
-                    log.debug("[%s] Playwright skipping '%s' — name mismatch for search '%s'", store.name, card["name"], card_name)
-                    continue
-                cards.append(card)
+                raw_list: list[dict] = await page.evaluate(js)
+                log.debug("[%s] Playwright parsed %d raw items for '%s'", store.name, len(raw_list), card_name)
 
-            log.info("[%s] Playwright → %d card(s) for '%s'", store.name, len(cards), card_name)
-            return cards
+                cards = []
+                for raw in raw_list:
+                    card = _make_card(raw, store)
+                    if card is None:
+                        continue
+                    # Filter: only keep results that contain the search term
+                    if not _name_matches(card_name, card["name"]):
+                        log.debug("[%s] Playwright skipping '%s' — name mismatch for search '%s'", store.name, card["name"], card_name)
+                        continue
+                    cards.append(card)
 
-        except Exception as exc:
-            log.warning("[%s] Playwright error scraping '%s': %s", store.name, card_name, exc)
-            raise
-        finally:
-            try:
-                await page.close()
-            except Exception:
-                pass
+                log.info("[%s] Playwright → %d card(s) for '%s'", store.name, len(cards), card_name)
+                return cards
+
+            except PlaywrightTimeoutError:
+                raise  # already logged above — don't double-log via the generic handler
+            except Exception as exc:
+                log.warning("[%s] Playwright error scraping '%s': %s", store.name, card_name, exc)
+                raise
+            finally:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+
+        # Unreachable in practice: the loop body always returns or raises.
+        raise RuntimeError(f"[{store.name}] Playwright scrape exhausted retries for '{card_name}'")
 
 
 async def _scrape_store_for_card(store: StoreConfig, card_name: str) -> list[dict]:
@@ -810,6 +855,11 @@ async def debug_store(store: StoreConfig, card_name: str) -> dict:
     # ── Phase 2: Playwright fallback ──────────────────────────────────────────
     result["playwright"] = True
     try:
+        # debug_store() does NOT retry goto timeouts — it's a diagnostic tool and
+        # masking a real timeout would defeat the point. It DOES relaunch a
+        # crashed browser, since otherwise a dead Chromium would poison every
+        # store's debug result, not just the one that killed it.
+        await _ensure_browser_healthy()
         if _browser is None:
             result["error"] += " | Playwright browser not running"
             return result
