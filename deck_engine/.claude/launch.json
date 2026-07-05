@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "atelier",
+      "runtimeExecutable": "/Users/trevorjow/Desktop/Cowork Playground/Local Gishath Fetch/gishath-local-v2/venv/bin/python",
+      "runtimeArgs": ["-m", "atelier.server"],
+      "env": {
+        "PYTHONPATH": "/Users/trevorjow/Desktop/Cowork Playground/Local Gishath Fetch/gishath-local-v2"
+      },
+      "port": 5077
+    }
+  ]
+}

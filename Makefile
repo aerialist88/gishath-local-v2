@@ -1,7 +1,7 @@
 # Gishath Fetch v2 — Makefile
 # Run all commands from the gishath-local-v2/ directory.
 
-.PHONY: engine-build run sync-engine clean install-playwright help
+.PHONY: engine-build run sync-engine clean install-playwright atelier atelier-web help
 
 GO          = /usr/local/go/bin/go
 ENGINE_SRC  = ../gishath_local/gishathfetch-master/api
@@ -12,6 +12,8 @@ help:
 	@echo "  make engine-build       Build the Go engine binary → bin/gishath-engine"
 	@echo "  make install-playwright Install Playwright + Chromium browser"
 	@echo "  make run                Start the Flask app (engine + Playwright auto-start)"
+	@echo "  make atelier            The Deckwright's Atelier — native desktop window"
+	@echo "  make atelier-web        The Atelier in the browser (http://127.0.0.1:5077)"
 	@echo "  make sync-engine        Pull upstream fixes into the engine fork"
 	@echo "  make clean              Remove the built engine binary"
 	@echo ""
@@ -28,6 +30,12 @@ engine-build:
 
 run:
 	. venv/bin/activate && python app.py
+
+atelier:
+	. venv/bin/activate && python -m atelier.desktop
+
+atelier-web:
+	. venv/bin/activate && python -m atelier.server
 
 sync-engine:
 	@echo "Fetching upstream changes..."

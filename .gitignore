@@ -9,3 +9,20 @@ __pycache__/
 logs/
 server.log
 *.db
+
+# deck_engine — keep run_log.json (small, meaningful history), ignore the
+# bulky/regeneratable Scryfall cache and per-run xlsx output.
+deck_engine/state/scryfall_cards.json
+deck_engine/state/scryfall_cache_meta.json
+deck_engine/state/*.corrupt
+deck_engine/state/*test*.json
+deck_engine/output/
+deck_engine/state/edhrec_cache/
+
+# Atelier UI — runtime state: art index is distilled from the Scryfall cache,
+# atelier_runs/ are per-run post-mortems, ui_settings.json is the user's
+# Guild-rules state (machine-local, holds email addresses).
+deck_engine/state/atelier_art_index.json
+deck_engine/state/atelier_runs/
+deck_engine/state/ui_settings.json
+_bashtest.txt

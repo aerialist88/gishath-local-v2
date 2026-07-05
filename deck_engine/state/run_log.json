@@ -1,0 +1,163 @@
+[
+  {
+    "timestamp": "2026-07-01T06:56:34.597483+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[select] [select/1] 'claude' not found. If run_nightly.sh runs under a thinner PATH than an interactive shell, set DECK_ENGINE_CLAUDE_BIN to the absolute path (see `which claude`)."
+  },
+  {
+    "timestamp": "2026-07-01T07:15:22.360237+00:00",
+    "commander": "Ratadrabik of Urborg",
+    "archetype": "Legend-stealing Zombie Tribal (clone/copy shell)",
+    "status": "success",
+    "colors": [
+      "B",
+      "W"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-01T07:34:31.810954+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[ideate/build/validate/optimize] [build] claude -p returned is_error=true: You've hit your session limit \u00b7 resets 6:10pm (Asia/Singapore)"
+  },
+  {
+    "timestamp": "2026-07-01T12:59:05.304557+00:00",
+    "commander": "Satsuki, the Living Lore",
+    "archetype": "Mono-green Saga recursion &amp; lore-counter engine",
+    "status": "success",
+    "colors": [
+      "G",
+      "W"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-01T22:29:36.358792+00:00",
+    "commander": "Zinnia, Valley's Voice",
+    "archetype": "Izzet dice-rolling chaos spellslinger",
+    "status": "success",
+    "colors": [
+      "R",
+      "U",
+      "W"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-01T22:54:08.078232+00:00",
+    "commander": "Magar of the Magic Strings",
+    "archetype": "Rakdos (B/R) combat-reanimator \u2014 Magar recursion engine",
+    "status": "success",
+    "colors": [
+      "B",
+      "R"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-02T03:24:29.058339+00:00",
+    "commander": "Old Rutstein",
+    "archetype": "Golgari token-aristocrats \u2014 three-lane Blood/Treasure/Insect grind",
+    "status": "success",
+    "colors": [
+      "B",
+      "G"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-02T09:24:47.287886+00:00",
+    "commander": "Omo, Queen of Vesuva",
+    "archetype": "Simic Omo \"everything counter\" toolbox \u2014 changeling typal go-wide + land-type ramp/alt-win",
+    "status": "success",
+    "colors": [
+      "G",
+      "U"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-02T14:03:51.560480+00:00",
+    "commander": "Hylda of the Icy Crown",
+    "archetype": "Azorius \"big freeze\" tap-down value-control",
+    "status": "success",
+    "colors": [
+      "U",
+      "W"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-03T00:31:34.289692+00:00",
+    "commander": "Tannuk, Steadfast Second",
+    "archetype": "Mono-red Warp value & artifact toolbox \u2014 cheap re-castable ETBs + burn control",
+    "status": "success",
+    "colors": [
+      "R"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-03T05:38:27.159662+00:00",
+    "commander": "Bello, Bard of the Brambles",
+    "archetype": "Gruul \"ghost crew\" animated-permanents beatdown (uncrewed Vehicles + MV4 artifacts/enchantments)",
+    "status": "success",
+    "colors": [
+      "G",
+      "R"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-03T06:20:25.802526+00:00",
+    "commander": "Arcades, the Strategist",
+    "archetype": "Bant defenders \u2014 Arcades ETB-blink card-advantage engine with a toughness-based finish",
+    "status": "success",
+    "colors": [
+      "G",
+      "U",
+      "W"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-03T23:21:42.841404+00:00",
+    "commander": "The Wise Mothman",
+    "archetype": "Sultai rad-counter proliferate / self-mill +1/+1 value engine",
+    "status": "success",
+    "colors": [
+      "B",
+      "G",
+      "U"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-03T23:42:06.175441+00:00",
+    "commander": "Wick, the Whorled Mind",
+    "archetype": "Grixis Rat-tribal +1/+1-counter \"one giant Snail\" group-slug / draw-refill",
+    "status": "success",
+    "colors": [
+      "B",
+      "R",
+      "U"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-04T06:43:01.189973+00:00",
+    "commander": "Braids, Arisen Nightmare",
+    "archetype": "Mono-black political symmetric-sacrifice edict grind",
+    "status": "success",
+    "colors": [
+      "B"
+    ],
+    "error_summary": ""
+  }
+]

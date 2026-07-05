@@ -1,0 +1,925 @@
+/* The Deckwright's Atelier — frontend. Vanilla JS single-page app:
+   hash routing, SSE-driven live view, no build step. */
+"use strict";
+
+const $ = (sel, el) => (el || document).querySelector(sel);
+const VIEW = $("#view");
+const HEAD_SUB = $("#head-sub");
+const HEAD_RIGHT = $("#head-right");
+const HEADER = $("#app-header");
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const money = (v, cur = "SGD") => v == null ? "—" :
+  (cur === "$" ? "$" + Number(v).toFixed(4) : cur + " " + Number(v).toFixed(2));
+
+const api = async (path, opts) => {
+  const res = await fetch(path, opts);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body;
+};
+
+function toast(msg) {
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3200);
+}
+
+/* Commander art: fills .art-ph[data-art] placeholders once the index warms up. */
+const artCache = {};
+async function fillArt(root) {
+  for (const ph of (root || document).querySelectorAll(".art-ph[data-art]")) {
+    const name = ph.dataset.art;
+    const kind = ph.dataset.artKind || "art_crop";
+    if (!name) continue;
+    try {
+      if (!(name in artCache)) {
+        const res = await fetch("/api/art?name=" + encodeURIComponent(name));
+        artCache[name] = res.ok ? await res.json() : null;
+      }
+      const entry = artCache[name];
+      const url = entry && (entry[kind] || entry.normal || entry.art_crop);
+      if (url && !ph.querySelector("img")) {
+        const img = document.createElement("img");
+        img.src = url;
+        img.alt = name;
+        ph.appendChild(img);
+      }
+    } catch (e) { /* placeholder stays — art is never load-bearing */ }
+  }
+}
+
+/* ── stage gauge ─────────────────────────────────────────────────────────── */
+
+const GAUGE_STAGES = ["Select", "Ideate", "Synthesize", "Build", "Validate", "Optimize", "Price", "Deliver"];
+
+/* Map a claude-call label (e.g. "ideate/attempt1/2") or a coarse run stage to
+   a gauge index. */
+function stageIndexOf(label) {
+  const l = (label || "").toLowerCase();
+  if (l.startsWith("select") || l.startsWith("mechanic")) return 0;
+  if (l.startsWith("ideate")) return 1;
+  if (l.startsWith("synthesize")) return 2;
+  if (l.startsWith("build") || l.startsWith("edhrec")) return 3;
+  if (l.includes("repair") && !l.includes("synergy") && !l.includes("budget")) return 4;
+  if (l.startsWith("validate")) return 4;
+  if (l.startsWith("optimize") || l.includes("synergy")) return 5;
+  if (l.startsWith("price") || l.startsWith("budget") || l.startsWith("card_tag")) return 6;
+  if (l.startsWith("export") || l.startsWith("deliver")) return 7;
+  if (l.startsWith("scryfall") || l.startsWith("startup")) return 0;
+  return null;
+}
+
+/* Bench personas — the in-world names for each pipeline stage's workbench. */
+function benchPersona(label) {
+  const l = (label || "").toLowerCase();
+  const ideate = l.match(/^ideate\/attempt\d+\/(\d)/);
+  if (ideate) {
+    const n = Number(ideate[1]);
+    const names = [null, ["C", "Apprentice Cog"], ["V", "Apprentice Verse"], ["F", "Apprentice Flux"]];
+    const angles = [null, "angle · first line", "angle · second line", "angle · third line"];
+    const p = names[n] || ["A", "Apprentice"];
+    return { initial: p[0], name: p[1], angle: angles[n] || "ideation bench" };
+  }
+  if (l.startsWith("select")) return { initial: "G", name: "The Guildmaster", angle: "choosing tonight's commander" };
+  if (l.startsWith("mechanic") || l.includes("synergy_tokens") || l.includes("token"))
+    return { initial: "S", name: "The Scrivener", angle: "naming the mechanics" };
+  if (l.startsWith("synthesize")) return { initial: "S", name: "The Scrivener", angle: "merging the three angles" };
+  if (l.startsWith("build")) return { initial: "B", name: "The Builder", angle: "drafting the hundred" };
+  if (l.includes("synergy-repair")) return { initial: "M", name: "The Master Deckwright", angle: "synergy mending" };
+  if (l.includes("repair") || l.startsWith("validate"))
+    return { initial: "M", name: "The Master Deckwright", angle: labelSuffix(l, "repair pass") };
+  if (l.startsWith("optimize")) return { initial: "O", name: "The Optimizer", angle: "swap-delta passes" };
+  if (l.startsWith("budget")) return { initial: "P", name: "The Purser", angle: "minding the per-card cap" };
+  if (l.startsWith("card_tag")) return { initial: "A", name: "The Archivist", angle: "tagging every card" };
+  return { initial: (label || "?")[0].toUpperCase(), name: label, angle: "at the bench" };
+}
+
+function labelSuffix(l, prefix) {
+  const m = l.match(/repair-(\d+)/);
+  return m ? `${prefix} ${m[1]}` : prefix;
+}
+
+/* ── router ─────────────────────────────────────────────────────────────── */
+
+let liveES = null;      // active EventSource
+let liveTicker = null;  // elapsed-clock interval
+let statusCache = null;
+
+function stopLive() {
+  if (liveES) { liveES.close(); liveES = null; }
+  if (liveTicker) { clearInterval(liveTicker); liveTicker = null; }
+}
+
+async function route() {
+  stopLive();
+  HEADER.classList.remove("halted");
+  const hash = location.hash || "#home";
+  const [name, arg] = hash.slice(1).split("/");
+  document.querySelectorAll("#main-nav a").forEach((a) => {
+    a.classList.toggle("active", a.dataset.nav === name || (name === "deck" && a.dataset.nav === "gallery"));
+  });
+  try {
+    if (name === "live") await viewLive();
+    else if (name === "deck" && arg) await viewDeck(arg);
+    else if (name === "gallery") await viewGallery();
+    else if (name === "rules") await viewRules();
+    else await viewHome();
+  } catch (err) {
+    VIEW.innerHTML = `<div class="page"><div class="empty-note">Something jammed in the workshop: ${esc(err.message)}</div></div>`;
+  }
+}
+window.addEventListener("hashchange", route);
+
+/* ── home / commission ──────────────────────────────────────────────────── */
+
+async function viewHome() {
+  const st = await api("/api/status");
+  statusCache = st;
+  if (st.running) { location.hash = "#live"; return; }
+
+  HEAD_SUB.textContent = "";
+  HEAD_RIGHT.innerHTML = `<span>night ${st.night_no}${st.nightly_enabled ? " · next nightly run " + esc(st.nightly_time) : ""}</span>`;
+
+  const latest = st.latest_deck;
+  const k = st.knobs;
+  const bracketNames = { "1": "Exhibition", "2": "Core", "3": "Upgraded", "3-4": "Upgraded", "4": "Optimized", "5": "cEDH" };
+
+  VIEW.innerHTML = `<div class="page">
+    <div class="hero">
+      <div class="hero-left">
+        <div>
+          <div class="caps-lg" style="margin-bottom:6px">Commission No. ${st.night_no}</div>
+          <div class="hero-title">What shall the guild artifice tonight?</div>
+          <div class="hero-blurb" style="margin-top:6px">Name a commander, or let the guild choose one — commanders forged within the last ${k.dedupe_days} days are excluded from the draw.</div>
+        </div>
+        <div class="commission-row">
+          <div class="commander-input"><span>&#8981;</span>
+            <input id="commander-input" type="text" placeholder="Name a commander&hellip; e.g. &ldquo;Braids, Arisen Nightmare&rdquo;" autocomplete="off">
+          </div>
+          <button class="btn-guild" id="btn-guild">Let the guild choose <span class="die"></span></button>
+        </div>
+        <div class="knobs">
+          <div class="knob"><span class="caps">Bracket</span><b>${esc(k.bracket)} — ${bracketNames[k.bracket] || ""}</b><small>guild rules, editable</small></div>
+          <div class="knob"><span class="caps">Budget</span><b>&le; ${money(k.deck_budget_sgd)}</b><small>per-card cap SGD ${Number(k.max_card_price_sgd).toFixed(0)}</small></div>
+          <div class="knob"><span class="caps">Colors</span><b>Any</b><small>guild's discretion</small></div>
+        </div>
+        <button class="btn-dark" id="btn-begin" style="align-self:flex-start">Begin the commission &rarr;</button>
+        <span class="demo-link" id="btn-demo">or run a rehearsal — the full live view, no API spend</span>
+        ${st.pricing_up === false ? `<div class="warn-chip" style="align-self:flex-start"><span>⚠</span><span>The pricing scrapers (make run, port 5003) aren't up — a commission tonight would ship unpriced.</span></div>` : ""}
+      </div>
+      ${latest ? `
+      <div class="panel fresh-plaque">
+        <div class="caps">Fresh from the forge — last night</div>
+        <div class="fresh-body">
+          <div class="art-ph" style="width:72px;height:100px" data-art="${esc(latest.commander)}" data-art-kind="normal"><span>commander<br>art</span></div>
+          <div>
+            <div class="fresh-name">${esc(latest.commander)}</div>
+            <div class="fresh-arch">${esc(latest.archetype)}</div>
+            <div class="fresh-meta">${money(latest.total_sgd)}<br>${esc(latest.ts.replace("_", " · ").replace(/-/g, "/"))}${latest.legal ? " · legal ✓" : ""}</div>
+          </div>
+        </div>
+        <button class="btn-ghost" onclick="location.hash='#deck/${esc(latest.id)}'">Open in the gallery &rarr;</button>
+      </div>` : `<div class="panel fresh-plaque"><div class="caps">Fresh from the forge</div><div class="empty-note" style="padding:20px 0">Nothing yet — commission the first deck.</div></div>`}
+    </div>
+    <div class="shelf-head">
+      <div class="caps-lg">The gallery — recent commissions</div>
+      <span class="mono" style="font-size:10.5px;color:var(--faint)">${st.night_no - 1} decks forged</span>
+    </div>
+    ${st.decks.length ? `<div class="shelf">${st.decks.slice(0, 10).map((d) => `
+      <div class="shelf-card" onclick="location.hash='#deck/${esc(d.id)}'">
+        <div class="art-ph" data-art="${esc(d.commander)}"><span>art crop</span></div>
+        <div class="shelf-name">${esc(d.commander)}</div>
+        <div class="shelf-arch">${esc(d.archetype)}</div>
+        <div class="shelf-meta">${esc(d.ts.slice(0, 10))} · ${money(d.total_sgd)}</div>
+      </div>`).join("")}</div>` :
+      `<div class="empty-note">The shelves are bare — the first commission awaits.</div>`}
+  </div>`;
+
+  const begin = async (commander) => {
+    try {
+      await api("/api/commission", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ commander: commander || null }),
+      });
+      location.hash = "#live";
+    } catch (err) { toast(err.message); }
+  };
+  $("#btn-guild").onclick = () => begin(null);
+  $("#btn-begin").onclick = () => begin($("#commander-input").value.trim());
+  $("#commander-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") begin(e.target.value.trim());
+  });
+  $("#btn-demo").onclick = async () => {
+    try {
+      await api("/api/commission", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ demo: true }),
+      });
+      location.hash = "#live";
+    } catch (err) { toast(err.message); }
+  };
+  fillArt(VIEW);
+}
+
+/* ── live run (workshop) ────────────────────────────────────────────────── */
+
+async function viewLive() {
+  let snap;
+  try { statusCache = await api("/api/status"); } catch { /* keep the stale one */ }
+  try {
+    snap = await api("/api/run/snapshot");
+  } catch (e) {
+    // No run in memory — maybe the last one halted before a restart.
+    try {
+      snap = await api("/api/run/last_failed");
+      renderLive(snap, true);
+      return;
+    } catch (e2) {
+      VIEW.innerHTML = `<div class="page"><div class="empty-note">The workshop is quiet — no commission on the bench.<br><br>
+        <button class="btn-dark" onclick="location.hash='#home'">Commission a deck &rarr;</button></div></div>`;
+      HEAD_SUB.textContent = "";
+      HEAD_RIGHT.innerHTML = "";
+      return;
+    }
+  }
+  renderLive(snap, false);
+  if (snap.status === "running") {
+    subscribeLive(snap);
+  }
+}
+
+function liveState(snap) {
+  /* derived helpers shared by render + SSE updates */
+  const calls = snap.call_order.map((l) => snap.calls[l]).filter(Boolean);
+  const active = calls.filter((c) => !c.done);
+  const finished = calls.filter((c) => c.done);
+  const cost = calls.reduce((s, c) => s + (c.cost_usd || 0), 0);
+  return { calls, active, finished, cost };
+}
+
+let liveBaselineSeq = 0; // events below this are already baked into the rendered snapshot
+
+function renderLive(snap, postMortem) {
+  liveBaselineSeq = snap.next_seq || 0;
+  const failed = snap.status === "failed" || snap.status === "cancelled";
+  const { calls, active, finished, cost } = liveState(snap);
+  const commissionNo = statusCache ? statusCache.night_no : "—";
+
+  HEADER.classList.toggle("halted", failed);
+  HEAD_SUB.textContent = failed
+    ? `Commission · halted`
+    : snap.status === "delivered" ? "Commission · delivered" : `Commission · in progress${snap.demo ? " · rehearsal" : ""}`;
+
+  if (failed) { renderFailure(snap, postMortem); return; }
+
+  HEAD_RIGHT.innerHTML = `
+    <div class="head-stat"><span class="caps">Elapsed</span><b id="stat-elapsed">—</b></div>
+    <div class="head-stat"><span class="caps">Spend</span><b id="stat-spend">$${cost.toFixed(4)}</b></div>
+    <div class="head-stat"><span class="caps">Calls</span><b id="stat-calls">${finished.length} / ~14</b></div>`;
+
+  const concept = snap.concept;
+  const gaugeIdx = currentGaugeIndex(snap);
+
+  VIEW.innerHTML = `<div class="page">
+    <div class="commission-plaque">
+      <div class="art-ph" style="width:86px;height:120px" data-art="${esc(concept ? concept.commander : "")}" data-art-kind="normal"><span>commander<br>art</span></div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div class="caps-lg">Tonight the guild artifices</div>
+        <div class="cp-name" id="cp-name">${concept ? esc(concept.commander) : '<span class="pulse">choosing&hellip;</span>'}</div>
+        <div class="cp-concept" id="cp-concept">${concept ? esc(concept.rationale || concept.archetype) : "the guildmaster considers the draw"}</div>
+      </div>
+      <div class="head-spacer"></div>
+      <div class="cp-pills" id="cp-pills">${concept ? conceptPills(concept) : ""}</div>
+    </div>
+    <div class="gauge" id="gauge">${gaugeHTML(gaugeIdx, snap)}</div>
+    <div class="caps-lg live-section-title" id="benches-title">${benchesTitle(snap, active)}</div>
+    <div class="live-cols">
+      <div class="benches" id="benches">${active.map((c) => benchHTML(c)).join("") || ""}</div>
+      <aside style="display:flex;flex-direction:column;gap:14px">
+        <div class="ledger" id="ledger">
+          <div class="caps" style="margin-bottom:8px">Ledger — the night so far</div>
+          <div id="ledger-rows">${finished.map(ledgerRowHTML).join("")}</div>
+        </div>
+        <div class="plaque-dark crucible" id="crucible">${crucibleHTML(cost)}</div>
+        ${snap.status === "running" && !snap.demo ? `<button class="btn-ghost btn-rust" id="btn-abandon">Abandon commission</button>` : ""}
+        ${snap.demo ? `<div class="fail-note">A rehearsal — scripted apprentices, not the real guild.</div>` : ""}
+      </aside>
+    </div>
+    <div id="delivered-slot">${snap.status === "delivered" ? deliveredHTML(snap) : ""}</div>
+  </div>`;
+
+  const abandonBtn = $("#btn-abandon");
+  if (abandonBtn) abandonBtn.onclick = async () => {
+    if (!confirm("Abandon this commission? The current bench finishes, then the run halts.")) return;
+    try { await api("/api/run/abandon", { method: "POST" }); } catch (err) { toast(err.message); }
+  };
+
+  // elapsed clock
+  const t0 = (snap.started_ts || (Date.now() / 1000)) * 1000;
+  const tick = () => {
+    const el = $("#stat-elapsed");
+    if (!el) return;
+    const s = Math.max(0, Math.floor((Date.now() - t0) / 1000));
+    el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  };
+  tick();
+  if (snap.status === "running") liveTicker = setInterval(tick, 1000);
+  fillArt(VIEW);
+}
+
+function conceptPills(concept) {
+  const colorNames = { W: "White", U: "Blue", B: "Black", R: "Red", G: "Green" };
+  const colors = (concept.colors || []).map((c) => colorNames[c] || c);
+  const colorLabel = colors.length === 0 ? "Colorless" :
+    colors.length === 1 ? "Mono-" + colors[0] : colors.join(" ");
+  return `<div class="pill">${esc(colorLabel)}</div><div class="pill">${esc(concept.archetype || "")}</div>`;
+}
+
+function currentGaugeIndex(snap) {
+  if (snap.status === "delivered") return GAUGE_STAGES.length;
+  let idx = stageIndexOf(snap.stage);
+  // calls are finer-grained than run.py's coarse stages — take the max signal
+  for (const label of snap.call_order) {
+    const i = stageIndexOf(label);
+    if (i != null && (idx == null || i > idx)) idx = i;
+  }
+  return idx == null ? 0 : idx;
+}
+
+function gaugeHTML(activeIdx, snap) {
+  return GAUGE_STAGES.map((name, i) => {
+    const cls = i < activeIdx ? "done" : i === activeIdx ? "active" : "";
+    const glyph = i < activeIdx ? "✓" : i === activeIdx ? "⚙" : String(i + 1);
+    return `<div class="gauge-seg ${cls}">
+      <div class="gauge-node"><div class="gauge-dot">${glyph}</div><div class="gauge-label">${name}</div></div>
+      ${i < GAUGE_STAGES.length - 1 ? '<div class="gauge-rail"></div>' : ""}
+    </div>`;
+  }).join("");
+}
+
+function benchesTitle(snap, active) {
+  if (snap.status === "delivered") return "The work is done — the commission is delivered";
+  if (!active.length) return "Between benches — the guild confers";
+  const l = active[0].label.toLowerCase();
+  if (l.startsWith("ideate")) return "The apprentices convene — three ideation benches, working in parallel";
+  if (l.includes("repair")) return "The master inspects the work — flaws found, repair underway";
+  if (l.startsWith("build")) return "The builder drafts the hundred";
+  if (l.startsWith("optimize")) return "The optimizer fact-checks and fine-tunes";
+  if (l.startsWith("select")) return "The guildmaster chooses tonight's commander";
+  return "At the bench";
+}
+
+function benchHTML(call) {
+  const p = benchPersona(call.label);
+  return `<div class="bench ${call.is_error ? "errored" : ""}" data-label="${esc(call.label)}">
+    <div class="bench-head">
+      <div class="bench-badge">${esc(p.initial)}</div>
+      <div><div class="bench-name">${esc(p.name)}</div><div class="bench-angle">${esc(p.angle)}</div></div>
+      <div class="head-spacer"></div>
+      <span class="model-chip">${esc(call.model)}</span>
+    </div>
+    <div class="bench-stream"><div><span class="stream-text">${esc(call.text_tail)}</span>${call.done ? "" : '<span class="caret"></span>'}</div></div>
+    <div class="bench-foot">
+      <span class="pulse status">⚙ ${esc(call.status)}</span><span class="head-spacer"></span>
+      <span class="meta">${call.done ? `${call.duration_s.toFixed(0)}s · $${call.cost_usd.toFixed(4)} · ${call.num_turns} turns` : ""}</span>
+    </div>
+  </div>`;
+}
+
+function ledgerRowHTML(call) {
+  const glyph = call.is_error ? "✕" : "✓";
+  const cls = call.is_error ? "err" : "ok";
+  return `<div class="ledger-row"><span class="glyph ${cls}">${glyph}</span>
+    <span class="stage-name">${esc(call.label)}</span><span class="dotlead"></span>
+    <span>${call.duration_s.toFixed(0)}s · $${call.cost_usd.toFixed(4)}</span></div>`;
+}
+
+function crucibleHTML(cost) {
+  const cap = (statusCache && statusCache.crucible_cap) || null;
+  const s = statusCache && statusCache.knobs;
+  const capUsd = s && Number(s.max_run_spend_usd) > 0 ? Number(s.max_run_spend_usd) : null;
+  const pct = capUsd ? Math.min(100, (cost / capUsd) * 100) : Math.min(100, cost * 20);
+  return `<div class="caps" style="color:var(--brass);margin-bottom:8px">Crucible spend</div>
+    <div class="amount">$${cost.toFixed(4)}</div>
+    <div class="crucible-bar"><div style="width:${pct}%"></div></div>
+    <div class="mono" style="font-size:9.5px;color:var(--faint);margin-top:6px">${capUsd ? "cap $" + capUsd.toFixed(2) : "no cap set — Guild rules can set one"}</div>`;
+}
+
+function deliveredHTML(snap) {
+  const d = snap.delivered || {};
+  const deckId = d.deck_id || "";
+  return `<div class="panel" style="margin-top:24px;padding:22px;display:flex;align-items:center;gap:20px">
+    <div>
+      <div class="caps-lg" style="margin-bottom:4px">Delivered</div>
+      <div class="serif" style="font-size:24px;font-weight:700">The commission is complete.</div>
+      <div class="mono" style="font-size:11px;color:var(--ink3);margin-top:6px">run cost $${(d.cost_usd || 0).toFixed(4)} · ${d.turns || 0} turns</div>
+    </div>
+    <div class="head-spacer"></div>
+    ${deckId ? `<button class="btn-brass" onclick="location.hash='#deck/${esc(deckId)}'">Open the deck &rarr;</button>` : ""}
+    <button class="btn-ghost" onclick="location.hash='#home'">Back to the atelier</button>
+  </div>`;
+}
+
+function subscribeLive(snap) {
+  const since = snap.next_seq || 0;
+  const es = new EventSource(`/api/run/events?since=${since}`);
+  liveES = es;
+  let needsRerender = false;
+
+  es.onmessage = (msg) => {
+    let e;
+    try { e = JSON.parse(msg.data); } catch { return; }
+    applyLiveEvent(e);
+  };
+  es.addEventListener("done", async () => {
+    es.close();
+    liveES = null;
+    // final re-render from an authoritative snapshot (delivered / failed states)
+    try {
+      const fresh = await api("/api/run/snapshot");
+      renderLive(fresh, false);
+    } catch { /* ignore */ }
+  });
+  es.onerror = () => { /* EventSource auto-reconnects; snapshot re-render on done covers gaps */ };
+}
+
+/* Incremental DOM updates for the hot path (token streaming); anything
+   structural falls back to a full snapshot re-render. */
+let rerenderQueued = false;
+async function rerenderSoon() {
+  if (rerenderQueued) return;
+  rerenderQueued = true;
+  setTimeout(async () => {
+    rerenderQueued = false;
+    try {
+      const fresh = await api("/api/run/snapshot");
+      if ((location.hash || "#home").startsWith("#live")) renderLive(fresh, false);
+      if (fresh.status === "running" && !liveES) subscribeLive(fresh);
+    } catch { /* ignore */ }
+  }, 120);
+}
+
+function applyLiveEvent(e) {
+  if (typeof e.seq === "number" && e.seq < liveBaselineSeq) return; // already in the snapshot we rendered
+  switch (e.type) {
+    case "call_text": {
+      const bench = document.querySelector(`.bench[data-label="${CSS.escape(e.label)}"] .stream-text`);
+      if (bench) {
+        bench.textContent = (bench.textContent + e.chunk).slice(-1200);
+      } else rerenderSoon();
+      break;
+    }
+    case "call_status": {
+      const el = document.querySelector(`.bench[data-label="${CSS.escape(e.label)}"] .status`);
+      if (el) el.textContent = "⚙ " + e.status; else rerenderSoon();
+      break;
+    }
+    case "call_started":
+    case "call_finished":
+    case "stage":
+    case "concept":
+    case "delivered":
+    case "failed":
+    case "announce":
+      rerenderSoon();
+      break;
+  }
+}
+
+/* ── failure (the forge gutters out) ────────────────────────────────────── */
+
+function renderFailure(snap, postMortem) {
+  const f = snap.failed || {};
+  const { finished, cost } = liveState(snap);
+  const cancelled = snap.status === "cancelled";
+  const isCap = (f.error || "").includes("crucible cap");
+  const stageIdx = stageIndexOf(f.stage) ?? currentGaugeIndex(snap);
+  const benchName = GAUGE_STAGES[Math.min(stageIdx ?? 0, GAUGE_STAGES.length - 1)] || "workshop";
+  const spendStages = f.spend_stages || finished.map((c) => ({ stage: c.label, cost_usd: c.cost_usd }));
+  const maxSpend = Math.max(0.0001, ...spendStages.map((s) => s.cost_usd || 0));
+  const s = statusCache && statusCache.knobs;
+  const capUsd = s && Number(s.max_run_spend_usd) > 0 ? Number(s.max_run_spend_usd) : null;
+
+  HEAD_RIGHT.innerHTML = `<div class="warn-chip"><span>⚠</span><span>${cancelled ? "The commission was abandoned" : isCap ? "The crucible ran dry — spend cap reached" : "The forge guttered out — the run halted"}</span></div>`;
+
+  VIEW.innerHTML = `<div class="page">
+    <div class="fail-cols">
+      <div style="display:flex;flex-direction:column;gap:18px">
+        <div>
+          <div class="fail-headline">The work stopped at the ${esc(benchName)} bench.</div>
+          <div class="fail-blurb" style="margin-top:8px">${esc(f.error || "The run halted without a reason on record.")}</div>
+        </div>
+        <div class="panel preserved">
+          <div class="art-ph" style="width:56px;height:78px" data-art="${esc(snap.concept ? snap.concept.commander : "")}"><span>art</span></div>
+          <div style="display:flex;flex-direction:column;gap:3px">
+            <span class="caps">${snap.concept ? "The commission" : "No commander was chosen yet"}</span>
+            <span class="serif" style="font-weight:700;font-size:20px">${esc(snap.concept ? snap.concept.commander : "—")}</span>
+            <span class="mono" style="font-size:10.5px;color:var(--ink3)">halted at the ${esc(f.stage || "?")} stage · $${(f.cost_usd || cost).toFixed(4)} spent</span>
+          </div>
+          <div class="head-spacer"></div>
+          <div class="preserved-actions">
+            ${isCap && capUsd ? `<button class="btn-brass" id="btn-raise">Raise cap to $${(capUsd * 1.5).toFixed(2)} &amp; recommission</button>` : ""}
+            <button class="btn-ghost" id="btn-retry">${snap.concept ? "Recommission " + esc(snap.concept.commander) : "Commission again"}</button>
+            <button class="btn-ghost btn-rust" onclick="location.hash='#home'">Abandon commission</button>
+          </div>
+        </div>
+        ${spendStages.length ? `<div class="panel-plain spend-bars">
+          <div class="caps" style="margin-bottom:12px">Where the crucible burned — spend by stage</div>
+          ${spendStages.map((sb) => `<div class="spend-bar-row">
+            <span class="lbl">${esc(sb.stage)}</span>
+            <div class="spend-bar-track"><div class="${isCap && sb === spendStages[spendStages.length - 1] ? "hot" : ""}" style="width:${((sb.cost_usd || 0) / maxSpend * 100).toFixed(1)}%"></div></div>
+            <span class="amt">$${(sb.cost_usd || 0).toFixed(4)}</span>
+          </div>`).join("")}
+        </div>` : ""}
+      </div>
+      <aside style="display:flex;flex-direction:column;gap:14px">
+        <div class="ledger">
+          <div class="caps" style="margin-bottom:8px">Ledger — how the night went</div>
+          ${finished.map(ledgerRowHTML).join("") || '<div class="ledger-row">· no calls completed</div>'}
+        </div>
+        <div class="plaque-dark crucible dry">
+          <div class="caps" style="color:#c98a5a;margin-bottom:8px">Crucible spend${isCap ? " — dry" : ""}</div>
+          <div class="amount">$${(f.cost_usd || cost).toFixed(4)}</div>
+          <div class="crucible-bar"><div style="width:${isCap ? 100 : Math.min(100, (f.cost_usd || cost) * 20)}%"></div></div>
+          <div class="mono" style="font-size:9.5px;color:#c98a5a;margin-top:6px">${capUsd ? "cap $" + capUsd.toFixed(2) + " · " : ""}${finished.length} calls</div>
+        </div>
+        <div class="fail-note">A halt is never silent — the report email still goes out, marked incomplete, with everything the guild managed.</div>
+      </aside>
+    </div>
+  </div>`;
+
+  const retry = async (raiseCap) => {
+    try {
+      if (raiseCap && capUsd) {
+        await api("/api/settings", {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ max_run_spend_usd: Number((capUsd * 1.5).toFixed(2)) }),
+        });
+      }
+      await api("/api/commission", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ commander: snap.forced_commander || (snap.concept && snap.concept.commander) || null }),
+      });
+      location.hash = "#live";
+      route();
+    } catch (err) { toast(err.message); }
+  };
+  const raiseBtn = $("#btn-raise");
+  if (raiseBtn) raiseBtn.onclick = () => retry(true);
+  $("#btn-retry").onclick = () => retry(false);
+  fillArt(VIEW);
+}
+
+/* ── finished deck ──────────────────────────────────────────────────────── */
+
+async function viewDeck(id) {
+  const deck = await api("/api/decks/" + encodeURIComponent(id));
+  HEAD_SUB.textContent = "";
+  HEAD_RIGHT.innerHTML = "";
+
+  const p = deck.price || {};
+  const flaggedCount = (deck.cards || []).filter((c) => c.over_cap).length;
+  const delivered = (deck.generated_utc || "").slice(11, 16);
+  const pills = [
+    `Bracket ${esc(deck.bracket || "?")}`,
+    deck.legal ? "Legal ✓" : "Legality unverified",
+    deck.synergy_gate_fired ? "Synergy gate repaired" : "Synergy gate passed",
+  ];
+
+  VIEW.innerHTML = `<div class="page">
+    <div class="deck-header">
+      <div class="art-ph" style="width:92px;height:128px;box-shadow:0 3px 8px rgba(120,90,30,.25)" data-art="${esc(deck.commander)}" data-art-kind="normal"><span>commander<br>art</span></div>
+      <div style="display:flex;flex-direction:column;gap:5px">
+        <div class="caps-lg">Commission ${esc(deck.run_id8 || "")}${delivered ? " · Delivered " + delivered : ""}</div>
+        <div class="deck-title">${esc(deck.commander)}</div>
+        <div class="cp-concept">${esc(deck.archetype || "")}${deck.summary ? " — " + esc(deck.summary) : ""}</div>
+        <div style="display:flex;gap:8px;margin-top:6px">${pills.map((x) => `<span class="pill">${x}</span>`).join("")}</div>
+      </div>
+      <div class="head-spacer"></div>
+      <div class="deck-header-right">
+        <div class="deck-price">${money(p.total_sgd)}</div>
+        <div class="deck-price-note">cheapest across the store scrapers${flaggedCount ? ` · ${flaggedCount} card${flaggedCount > 1 ? "s" : ""} over cap, flagged` : ""}${p.unpriced_count ? ` · ${p.unpriced_count} unpriced` : ""}</div>
+        <div style="display:flex;gap:8px">
+          ${deck.files && deck.files.moxfield_txt ? `<a class="btn-brass" href="/api/decks/${esc(id)}/file/txt">Moxfield .txt</a>` : ""}
+          ${deck.files && deck.files.xlsx ? `<a class="btn-ghost" href="/api/decks/${esc(id)}/file/xlsx">.xlsx</a>` : ""}
+        </div>
+      </div>
+    </div>
+    <div class="tabs" id="deck-tabs">
+      ${["Decklist", "Breakdown", "Gameplan", "Stats"].map((t, i) => `<div class="tab ${i === 0 ? "active" : ""}" data-tab="${t.toLowerCase()}">${t}</div>`).join("")}
+    </div>
+    <div id="deck-body"></div>
+  </div>`;
+
+  const body = $("#deck-body");
+  const tabs = { decklist: () => decklistTab(deck), breakdown: () => breakdownTab(deck), gameplan: () => gameplanTab(deck), stats: () => statsTab(deck) };
+  const show = (name) => {
+    document.querySelectorAll("#deck-tabs .tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
+    body.innerHTML = tabs[name]();
+    fillArt(body);
+  };
+  document.querySelectorAll("#deck-tabs .tab").forEach((t) => (t.onclick = () => show(t.dataset.tab)));
+  show("decklist");
+  fillArt(VIEW);
+}
+
+function groupByRole(cards) {
+  const groups = new Map();
+  for (const c of cards) {
+    const role = c.is_commander ? "Commander" : (c.role || "Unsorted");
+    if (!groups.has(role)) groups.set(role, []);
+    groups.get(role).push(c);
+  }
+  return groups;
+}
+
+function decklistTab(deck) {
+  const groups = groupByRole(deck.cards || []);
+  const stats = deck.stats || {};
+  const curve = stats.curve || {};
+  const maxCurve = Math.max(1, ...Object.values(curve));
+  const lands = (deck.cards || []).filter((c) => (c.type_line || "").toLowerCase().includes("land")).length;
+  const nonland = (deck.cards || []).filter((c) => c.cmc != null && !(c.type_line || "").toLowerCase().includes("land"));
+  const avgCmc = nonland.length ? (nonland.reduce((s, c) => s + c.cmc, 0) / nonland.length).toFixed(2) : "—";
+  const spend = deck.spend || {};
+  const top = (deck.price && deck.price.top_expensive) || [];
+  const gameplanQuote = (deck.gameplan && deck.gameplan.early) || deck.summary || "";
+
+  return `<div class="deck-cols">
+    <div class="rolelist">
+      ${[...groups.entries()].map(([role, cards]) => `
+        <div class="rolegroup">
+          <div class="rolegroup-head"><span class="serif">${esc(role)}</span><span class="count">${cards.length} card${cards.length > 1 ? "s" : ""}</span></div>
+          ${cards.map((c) => `<div class="cardrow"><span>${esc(c.name)}</span><span class="dotlead"></span>
+            <span class="price ${c.over_cap ? "flag" : ""}">${c.price_sgd != null ? c.price_sgd.toFixed(2) + (c.over_cap ? " ⚑" : "") : "—"}</span></div>`).join("")}
+        </div>`).join("")}
+    </div>
+    <aside class="rail">
+      <div class="rail-panel">
+        <div class="caps" style="margin-bottom:12px">Mana curve</div>
+        <div class="curve">
+          ${["0", "1", "2", "3", "4", "5", "6+"].map((b) => `
+            <div class="curve-col"><span class="n">${curve[b] || 0}</span>
+              <div class="bar" style="height:${Math.max(2, ((curve[b] || 0) / maxCurve) * 64)}px"></div>
+              <span class="x">${b}</span></div>`).join("")}
+        </div>
+        <div class="mono" style="font-size:10.5px;color:var(--ink3);margin-top:10px">avg CMC ${avgCmc} · ${lands} lands</div>
+      </div>
+      ${top.length ? `<div class="rail-panel">
+        <div class="caps" style="margin-bottom:12px">Priciest inclusions</div>
+        ${top.map(([n, pr]) => `<div class="cardrow" style="font-size:12.5px"><span>${esc(n)}</span><span class="dotlead"></span>
+          <span class="price ${pr > (deck.price.per_card_cap_sgd || Infinity) ? "flag" : ""}">${pr.toFixed(2)}</span></div>`).join("")}
+      </div>` : ""}
+      <div class="note-plaque">
+        <div class="caps" style="color:var(--brass);margin-bottom:8px">The artificers&rsquo; note</div>
+        <div class="quote">&ldquo;${esc(gameplanQuote.slice(0, 220))}${gameplanQuote.length > 220 ? "&hellip;" : ""}&rdquo;</div>
+        ${spend.total_cost_usd != null ? `<div class="mono" style="font-size:10px;color:var(--faint);margin-top:10px">run cost $${Number(spend.total_cost_usd).toFixed(2)} · ${spend.total_turns || 0} turns</div>` : ""}
+      </div>
+    </aside>
+  </div>`;
+}
+
+function breakdownTab(deck) {
+  return `<div style="padding:24px 0;overflow-x:auto">
+    <table class="breakdown-table">
+      <thead><tr><th>Card</th><th>SG Price</th><th>Store</th><th>Role</th><th>Phase</th><th>CMC</th><th>Type</th><th>Rarity</th></tr></thead>
+      <tbody>${(deck.cards || []).map((c) => `<tr>
+        <td${c.is_commander ? ' style="font-weight:700"' : ""}>${esc(c.name)}</td>
+        <td class="mono ${c.over_cap ? "flag" : ""}" style="${c.over_cap ? "color:var(--rust)" : "color:#065f46"}">${c.price_sgd != null ? "SGD " + c.price_sgd.toFixed(2) + (c.over_cap ? " ⚑" : "") : "unavailable"}</td>
+        <td class="mono">${esc(c.store || "—")}</td>
+        <td>${esc(c.role)}</td><td>${esc(c.phase)}</td>
+        <td class="mono">${c.cmc ?? ""}</td>
+        <td style="color:var(--ink3)">${esc(c.type_line)}</td>
+        <td>${esc((c.rarity || "").replace(/^\w/, (ch) => ch.toUpperCase()))}</td>
+      </tr>`).join("")}</tbody>
+    </table>
+  </div>`;
+}
+
+function gameplanTab(deck) {
+  const g = deck.gameplan || {};
+  const sections = [
+    ["Why this pick", deck.summary],
+    ["Early game", g.early], ["Mid game", g.mid], ["Late game", g.late],
+    ["Changes made during the optimize pass", g.changes_made],
+  ].filter(([, txt]) => txt);
+  return `<div class="gameplan-block">
+    ${sections.map(([h, txt]) => `<div><h3>${esc(h)}</h3><p>${esc(txt)}</p></div>`).join("") || '<div class="empty-note">No gameplan on record for this commission.</div>'}
+  </div>`;
+}
+
+function statsTab(deck) {
+  const s = deck.stats || {};
+  const pipNames = { W: "White", U: "Blue", B: "Black", R: "Red", G: "Green", C: "Colourless" };
+  const spend = deck.spend || {};
+  return `<div class="stats-grid">
+    <div class="rail-panel"><div class="caps" style="margin-bottom:10px">Mana curve (nonland)</div>
+      <table class="stat-table">${["0","1","2","3","4","5","6+"].map((b) => `<tr><td>CMC ${b}</td><td>${(s.curve || {})[b] || 0}</td></tr>`).join("")}</table></div>
+    <div class="rail-panel"><div class="caps" style="margin-bottom:10px">Colour pips</div>
+      <table class="stat-table">${Object.entries(pipNames).map(([k, n]) => `<tr><td>${n}</td><td>${(s.pips || {})[k] || 0}</td></tr>`).join("")}</table></div>
+    <div class="rail-panel"><div class="caps" style="margin-bottom:10px">Roles</div>
+      <table class="stat-table">${Object.entries(s.role_counts || {}).sort((a, b) => b[1] - a[1]).map(([r, n]) => `<tr><td>${esc(r)}</td><td>${n}</td></tr>`).join("")}</table></div>
+    ${spend.total_cost_usd != null ? `<div class="rail-panel"><div class="caps" style="margin-bottom:10px">The night's ledger</div>
+      <table class="stat-table">
+        <tr><td>API cost</td><td>$${Number(spend.total_cost_usd).toFixed(4)}</td></tr>
+        <tr><td>Turns</td><td>${spend.total_turns || 0}</td></tr>
+        ${spend.cache_hit_ratio != null ? `<tr><td>Cache hit ratio</td><td>${(spend.cache_hit_ratio * 100).toFixed(0)}%</td></tr>` : ""}
+      </table></div>` : ""}
+  </div>`;
+}
+
+/* ── gallery ────────────────────────────────────────────────────────────── */
+
+async function viewGallery() {
+  const decks = await api("/api/decks");
+  HEAD_SUB.textContent = "";
+  HEAD_RIGHT.innerHTML = `<span>${decks.length} decks forged</span>`;
+  VIEW.innerHTML = `<div class="page">
+    <div class="shelf-head" style="margin-top:28px"><div class="caps-lg">The gallery — every commission</div></div>
+    ${decks.length ? `<div class="gallery-grid">${decks.map((d) => `
+      <div class="shelf-card" onclick="location.hash='#deck/${esc(d.id)}'">
+        <div class="art-ph" data-art="${esc(d.commander)}" style="height:80px"><span>art crop</span></div>
+        <div class="shelf-name">${esc(d.commander)}</div>
+        <div class="shelf-arch">${esc(d.archetype)}</div>
+        <div class="shelf-meta">${esc(d.ts.slice(0, 10))} · ${money(d.total_sgd)}</div>
+      </div>`).join("")}</div>` : '<div class="empty-note">The shelves are bare — the first commission awaits.</div>'}
+  </div>`;
+  fillArt(VIEW);
+}
+
+/* ── guild rules ────────────────────────────────────────────────────────── */
+
+async function viewRules() {
+  const s = await api("/api/settings");
+  HEAD_SUB.textContent = "";
+  HEAD_RIGHT.innerHTML = `<button class="btn-brass" id="btn-save">Inscribe changes</button><span class="save-feedback" id="save-note"></span>`;
+
+  const brackets = [["1", "Exhibition"], ["2", "Core"], ["3", "Upgraded"], ["4", "Optimized"], ["5", "cEDH"]];
+  const stages = [
+    ["select", "Select", "concept + dedupe"],
+    ["ideate", "Ideate ×3", "three benches in parallel"],
+    ["build", "Build", "the 100-card list"],
+    ["validate_repair", "Validate + repair", "code-level checks, LLM mends"],
+    ["optimize", "Optimize", "swap-delta passes"],
+    ["card_tagger", "Card tagger", "roles + phases for the sheets"],
+  ];
+  const state = JSON.parse(JSON.stringify(s));
+
+  VIEW.innerHTML = `<div class="page"><div class="rules-grid">
+    <div class="rules-col">
+      <div class="rule-panel">
+        <div class="rule-panel-head">The purse</div>
+        <div class="rule-panel-body">
+          ${sliderRow("deck_budget_sgd", "Deck budget", "total, cheapest across the stores — display only, never enforced", 50, 1000, 10, s.deck_budget_sgd, (v) => "SGD " + Number(v).toFixed(0))}
+          ${sliderRow("max_card_price_sgd", "Per-card cap", "singles above this are flagged / swapped", 5, 300, 5, s.max_card_price_sgd, (v) => "SGD " + Number(v).toFixed(0))}
+          ${sliderRow("max_run_spend_usd", "Crucible cap", "API spend per nightly run · 0 disables the halt", 0, 20, 0.5, s.max_run_spend_usd, (v) => Number(v) > 0 ? "$" + Number(v).toFixed(2) : "off")}
+        </div>
+      </div>
+      <div class="rule-panel">
+        <div class="rule-panel-head">The bracket</div>
+        <div class="rule-panel-body"><div class="bracket-cards" id="bracket-cards">
+          ${brackets.map(([n, label]) => `<div class="bracket-card ${String(s.bracket).startsWith(n) ? "active" : ""}" data-bracket="${n}">
+            <span class="n">${n}</span><span class="lbl">${label}</span></div>`).join("")}
+        </div></div>
+      </div>
+      <div class="rule-panel">
+        <div class="rule-panel-head">The nightly bell</div>
+        <div class="rule-panel-body">
+          ${toggleRow("nightly_enabled", "Nightly commission", "run_nightly.sh's schedule — shown here, scheduled outside the app", s.nightly_enabled,
+            `<span class="toggle-value"><input id="in-nightly-time" value="${esc(s.nightly_time)}" maxlength="5"></span>`)}
+          ${toggleRow("exclude_recent_commanders", "Exclude recent commanders", "no repeats within the window", s.exclude_recent_commanders,
+            `<span class="toggle-value"><input id="in-dedupe-days" value="${Number(s.dedupe_commander_days)}" maxlength="3"> days</span>`)}
+          ${toggleRow("resume_session_chaining", "Resume chaining", "experimental — chains claude sessions between stages", s.resume_session_chaining, "")}
+        </div>
+      </div>
+    </div>
+    <div class="rules-col">
+      <div class="rule-panel">
+        <div class="rule-panel-head">The workforce <small>which mind works each bench</small></div>
+        <div class="rule-panel-body" style="gap:0">
+          ${stages.map(([key, label, note]) => `<div class="workforce-row">
+            <span class="stage">${label}</span><span class="note">${note}</span>
+            <div style="display:flex;gap:4px">${["haiku", "sonnet", "opus"].map((tier) =>
+              `<button class="tier-chip ${s.model_tiers[key] === tier ? "active" : ""}" data-stage="${key}" data-tier="${tier}">${tier}</button>`).join("")}</div>
+          </div>`).join("")}
+        </div>
+      </div>
+      <div class="rule-panel">
+        <div class="rule-panel-head">The courier</div>
+        <div class="rule-panel-body">
+          <div>
+            <div class="caps" style="letter-spacing:1px;margin-bottom:5px">Master's copy — full diagnostics</div>
+            <input class="email-input" id="in-email" value="${esc(s.email_to)}" placeholder="you@example.com">
+          </div>
+          <div>
+            <div class="caps" style="letter-spacing:1px;margin-bottom:5px">The newsletter — clean copy, no diagnostics</div>
+            <div class="bcc-box" id="bcc-box">
+              ${s.newsletter_bcc.map((a) => `<span class="bcc-chip" data-addr="${esc(a)}">${esc(a)} ×</span>`).join("")}
+              <input class="bcc-add" id="bcc-add" placeholder="+ add a friend&hellip;">
+            </div>
+          </div>
+          <div class="courier-note">Friends receive the deck and the tale — never the cost sheet.</div>
+        </div>
+      </div>
+    </div>
+  </div></div>`;
+
+  // wire the controls into `state`
+  for (const key of ["deck_budget_sgd", "max_card_price_sgd", "max_run_spend_usd"]) {
+    const input = $(`#slider-${key}`);
+    input.oninput = () => {
+      state[key] = Number(input.value);
+      $(`#slider-val-${key}`).textContent = input.dataset.fmt === "usd"
+        ? (state[key] > 0 ? "$" + state[key].toFixed(2) : "off")
+        : "SGD " + state[key].toFixed(0);
+    };
+  }
+  document.querySelectorAll("#bracket-cards .bracket-card").forEach((card) => {
+    card.onclick = () => {
+      state.bracket = card.dataset.bracket;
+      document.querySelectorAll("#bracket-cards .bracket-card").forEach((c) => c.classList.toggle("active", c === card));
+    };
+  });
+  document.querySelectorAll(".toggle[data-key]").forEach((tog) => {
+    tog.onclick = () => {
+      state[tog.dataset.key] = !state[tog.dataset.key];
+      tog.classList.toggle("on", state[tog.dataset.key]);
+    };
+  });
+  document.querySelectorAll(".tier-chip").forEach((chip) => {
+    chip.onclick = () => {
+      state.model_tiers[chip.dataset.stage] = chip.dataset.tier;
+      document.querySelectorAll(`.tier-chip[data-stage="${chip.dataset.stage}"]`).forEach((c) =>
+        c.classList.toggle("active", c === chip));
+    };
+  });
+  const bccBox = $("#bcc-box");
+  bccBox.addEventListener("click", (e) => {
+    const chip = e.target.closest(".bcc-chip");
+    if (chip) {
+      state.newsletter_bcc = state.newsletter_bcc.filter((a) => a !== chip.dataset.addr);
+      chip.remove();
+    }
+  });
+  $("#bcc-add").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.value.trim()) {
+      const addr = e.target.value.trim();
+      state.newsletter_bcc.push(addr);
+      const chip = document.createElement("span");
+      chip.className = "bcc-chip";
+      chip.dataset.addr = addr;
+      chip.textContent = addr + " ×";
+      e.target.before(chip);
+      e.target.value = "";
+    }
+  });
+
+  $("#btn-save").onclick = async () => {
+    const note = $("#save-note");
+    state.email_to = $("#in-email").value.trim();
+    state.nightly_time = $("#in-nightly-time").value.trim();
+    state.dedupe_commander_days = Number($("#in-dedupe-days").value) || state.dedupe_commander_days;
+    try {
+      await api("/api/settings", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(state),
+      });
+      note.className = "save-feedback";
+      note.textContent = "inscribed ✓";
+    } catch (err) {
+      note.className = "save-feedback err";
+      note.textContent = err.message;
+    }
+    setTimeout(() => { note.textContent = ""; }, 4000);
+  };
+}
+
+function sliderRow(key, label, hint, min, max, step, value, fmt) {
+  const isUsd = key === "max_run_spend_usd";
+  return `<div class="slider-row">
+    <div class="slider-label"><b>${label}</b><small>${hint}</small></div>
+    <input type="range" id="slider-${key}" min="${min}" max="${max}" step="${step}" value="${Number(value)}" data-fmt="${isUsd ? "usd" : "sgd"}">
+    <span class="slider-value" id="slider-val-${key}">${fmt(value)}</span>
+  </div>`;
+}
+
+function toggleRow(key, label, hint, on, extra) {
+  return `<div class="toggle-row">
+    <div class="toggle ${on ? "on" : ""}" data-key="${key}"><div class="knob-dot"></div></div>
+    <div class="toggle-label"><b>${label}</b><small>${hint}</small></div>
+    ${extra}
+  </div>`;
+}
+
+/* ── boot ───────────────────────────────────────────────────────────────── */
+
+(async () => {
+  try { statusCache = await api("/api/status"); } catch { /* first paint can live without it */ }
+  if (statusCache && statusCache.running && !location.hash) location.hash = "#live";
+  route();
+})();
