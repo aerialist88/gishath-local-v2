@@ -145,6 +145,10 @@ def play(log: RunEventLog) -> None:  # noqa: PLR0915 — a script reads top to b
     time.sleep(1.6)
     log.emit("stage", stage="budget")
     announce("[demo] budget pass: 1 swap, 2 cards over cap — shipping flagged")
+    log.emit("budget_swaps", swaps=[
+        {"remove": "Ashnod's Altar", "removed_price": 18.60, "add": "Phyrexian Tower",
+         "added_price": 6.40, "reason": "same free-sac role, well under the per-card cap"},
+    ])
     time.sleep(0.8)
     log.emit("stage", stage="export")
     announce(f"[run {run_id[:8]}] wrote output/(demo — nothing actually written)")

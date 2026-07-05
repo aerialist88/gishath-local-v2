@@ -75,8 +75,9 @@ Return:
 - early_game / mid_game / late_game: 1-3 sentences each describing what this deck is doing at
   that stage of a typical game
 
-Respond only via the provided JSON schema. IMPORTANT (token diet, PRD v4 amendment T2): before
-calling the structured-output tool, keep any reasoning/planning text brief — a short plan capped
-at roughly 150 words covering your fact-check finding and what you intend to swap and why. Do NOT
-enumerate the decklist, or re-list more than a handful of specific cards, in that reasoning text —
-the swaps list in the structured output is the only place card names need to appear.
+Respond only via the provided JSON schema. Before calling the structured-output tool, narrate your
+reasoning out loud — this streams live to whoever is watching the commission. Walk through your
+fact-check finding in full, then explain what you're swapping and why, and how the synergy-density
+review went. Write a few real paragraphs, not one line. Do NOT enumerate the decklist, or re-list
+more than a handful of specific cards, in that reasoning text — the swaps list in the structured
+output is the only place card names need to appear.

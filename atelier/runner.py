@@ -54,6 +54,7 @@ class RunEventLog:
             "announces": [],
             "calls": {},                  # label -> call dict
             "call_order": [],
+            "budget_swaps": [],
             "delivered": None,
             "failed": None,
             "demo": False,
@@ -80,6 +81,8 @@ class RunEventLog:
             s["concept"] = {k: e.get(k) for k in ("commander", "archetype", "rationale", "colors")}
         elif etype == "announce":
             s["announces"].append(e["text"])
+        elif etype == "budget_swaps":
+            s.setdefault("budget_swaps", []).extend(e.get("swaps") or [])
         elif etype == "call_started":
             call = {"label": e["label"], "model": e["model"], "text_tail": "", "status": "thinking...",
                     "done": False, "is_error": False, "cost_usd": 0.0, "num_turns": 0,
@@ -203,13 +206,18 @@ class AtelierView:
         self._log.emit("concept", commander=commander, archetype=archetype,
                        rationale=rationale, colors=colors or [])
 
+    def budget_swaps(self, *, swaps: list, **_kw) -> None:
+        self._log.emit("budget_swaps", swaps=swaps)
+
     def run_delivered(self, *, run_id: str, deck_json: str = "", xlsx: str = "",
-                      moxfield_txt: str = "", spend_summary=None, **_kw) -> None:
+                      moxfield_txt: str = "", spend_summary=None,
+                      email_error: str | None = None, **_kw) -> None:
         spend = spend_summary or {}
         self._log.emit("delivered", run_id=run_id, deck_id=run_id[:8],
                        deck_json=deck_json, xlsx=xlsx, moxfield_txt=moxfield_txt,
                        cost_usd=spend.get("total_cost_usd", 0.0),
-                       turns=spend.get("total_turns", 0))
+                       turns=spend.get("total_turns", 0),
+                       email_error=email_error)
 
     def run_failed(self, *, run_id: str, stage: str, error: str, spend_summary=None, **_kw) -> None:
         spend = spend_summary or {}

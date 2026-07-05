@@ -26,7 +26,9 @@ Propose ONE replacement for EACH card listed above. Every replacement must:
   just cheaper than the original
 
 Do NOT propose swapping any card that isn't in the list above — everything else in the deck
-is already within budget. Keep any reasoning text brief (a short note per swap, not an essay);
-the swap data belongs only in the structured output.
+is already within budget. Before calling the structured-output tool, explain your reasoning for
+each swap — why that particular replacement, and how it still fills the role — this streams live
+to whoever is watching the commission. The swap data itself belongs only in the structured output,
+not repeated card-by-card in your narration.
 
 Respond only via the provided JSON schema.

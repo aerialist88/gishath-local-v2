@@ -14,6 +14,34 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+# ── .env auto-load ────────────────────────────────────────────────────────────
+# run_nightly.sh loads deck_engine/.env into the shell environment itself
+# (`set -a; source deck_engine/.env; set +a`) before invoking Python — but any
+# OTHER entry point (the Atelier UI, a REPL, a future script) imports this
+# module directly with no shell step in between, so a value that only ever
+# lived in the .env file (never actually exported into the process) was
+# invisible to it — confirmed 2026-07-05: a real Atelier commission built a
+# complete deck end to end, then failed at the deliver stage with
+# EmailConfigError even though deck_engine/.env had a real address/App
+# Password on disk the whole time. Loading it here, once, at import time,
+# makes every entry point behave the same regardless of how it was launched.
+def _load_dotenv(path: Path) -> None:
+    if not path.exists():
+        return
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        os.environ.setdefault(key, value)  # a real, already-exported env var always wins
+
+
+_load_dotenv(Path(__file__).resolve().parent / ".env")
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
 REPO_ROOT: Path = Path(__file__).resolve().parent.parent          # gishath-local-v2/

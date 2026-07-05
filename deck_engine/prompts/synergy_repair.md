@@ -23,6 +23,9 @@ wholesale rebuild. Not every generic card needs replacing; use judgement on how 
 actually improve the deck without gutting its functional shell.
 
 Return the complete, corrected $deck_size_minus_1-card decklist. Respond only via the provided
-JSON schema — a flat list of exactly $deck_size_minus_1 card name strings. Keep any
-reasoning/planning text brief (a short plan, not a card-by-card narration) — the actual card names
-belong only in the structured output.
+JSON schema — a flat list of exactly $deck_size_minus_1 card name strings. Before calling the
+structured-output tool, narrate your reasoning out loud — this streams live to whoever is watching
+the commission: which generic cards you're targeting and why, what you're bringing in instead and
+how it plays into the commander's mechanic. Write a few real paragraphs, not one line — but the
+actual card names for the full decklist belong only in the structured output, not repeated
+card-by-card in your narration.

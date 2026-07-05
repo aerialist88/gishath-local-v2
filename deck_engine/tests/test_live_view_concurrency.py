@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import sys
+import uuid
 from pathlib import Path
 
 from .. import claude_cli, config, live_view
@@ -25,12 +26,18 @@ def main() -> int:
     view = live_view.LiveView()
     claude_cli.set_live_view(view)
 
+    # A fresh id per run, not a fixed literal — spend_log.jsonl is never
+    # truncated between runs (see deck_engine/README's pre-flight checklist),
+    # so a hardcoded run_id would accumulate cost across every invocation of
+    # this test ever made and eventually trip a real crucible cap (confirmed
+    # 2026-07-05: exactly this happened once a non-zero cap was configured).
+    run_id = str(uuid.uuid4())
     errors: list[str] = []
 
     def _one(i: int) -> None:
         try:
             result = claude_cli.run(
-                f"fake ideation prompt {i}", run_id="test-run", stage=f"ideate/attempt1/{i + 1}",
+                f"fake ideation prompt {i}", run_id=run_id, stage=f"ideate/attempt1/{i + 1}",
                 model_tier_key="ideate", json_schema={"type": "object"},
             )
             assert result.text or result.raw.get("structured_output") is not None, (

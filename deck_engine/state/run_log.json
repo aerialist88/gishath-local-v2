@@ -159,5 +159,13 @@
       "B"
     ],
     "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-05T02:54:30.649025+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[deliver] Email send failed (EmailConfigError: DECK_ENGINE_EMAIL_FROM is not set \u2014 set it to a Gmail address with an App Password (see deck_engine/emailer.py docstring).). Report saved to /Users/trevorjow/Desktop/Cowork Playground/Local Gishath Fetch/gishath-local-v2/deck_engine/logs/UNSENT_2026-07-05_02-54-30_EDH Nightly 14  Ms Bumbleflower SGD 46758.txt instead."
   }
 ]

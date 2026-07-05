@@ -125,6 +125,11 @@ def main(view=None, forced_commander: str | None = None, run_id: str | None = No
                 if budget_outcome.swaps_made:
                     _announce(f"[run {run_id[:8]}] budget pass: {len(budget_outcome.swaps_made)} swap(s), "
                               f"{len(budget_outcome.over_budget)} still over cap")
+                    _notify("budget_swaps", swaps=[
+                        {"remove": removed, "removed_price": removed_price,
+                         "add": added, "added_price": added_price, "reason": reason}
+                        for removed, removed_price, added, added_price, reason in budget_outcome.swaps_made
+                    ])
                 elif budget_outcome.over_budget:
                     _announce(f"[warn] budget pass: {len(budget_outcome.over_budget)} card(s) over "
                               f"SGD {budget_outcome.cap:.0f}, shipping flagged")
@@ -147,11 +152,24 @@ def main(view=None, forced_commander: str | None = None, run_id: str | None = No
                     spend_summary=spend_summary,
                     xlsx_path=xlsx_path, moxfield_txt_path=moxfield_txt_path,
                 )
-                emailer.send_success_email(
-                    deck=deck, xlsx_path=xlsx_path, moxfield_txt_path=moxfield_txt_path,
-                    spend_summary=spend_summary, pricing=pricing_outcome, cache=cache,
-                    budget=budget_outcome,
-                )
+                # The deck is fully built and already saved to disk by this point
+                # (export above) — a bounced/misconfigured email is a delivery-
+                # channel problem, not a failed commission, and must not be
+                # reported as one (to run_log's dedupe history or to the Atelier
+                # UI, which would otherwise show a "recommission" button that
+                # wastes API spend rebuilding a deck that already exists).
+                # emailer._send() has already written a local UNSENT_*.txt fallback
+                # copy before this exception ever reaches here.
+                email_error: str | None = None
+                try:
+                    emailer.send_success_email(
+                        deck=deck, xlsx_path=xlsx_path, moxfield_txt_path=moxfield_txt_path,
+                        spend_summary=spend_summary, pricing=pricing_outcome, cache=cache,
+                        budget=budget_outcome,
+                    )
+                except Exception as exc:  # noqa: BLE001 — see comment above; the commission still succeeded
+                    email_error = str(exc)
+                    _announce(f"[run {run_id[:8]}] WARNING: report email failed to send: {exc}")
 
                 run_log.append_record(run_log.RunRecord.now(
                     # final_archetype (optimize's fact-checked label), not concept.archetype
@@ -168,7 +186,7 @@ def main(view=None, forced_commander: str | None = None, run_id: str | None = No
                               f"turns={spend_summary['total_turns']} {cache_note} {tools_note}")
                 _notify("run_delivered", run_id=run_id, deck_json=str(deck_json_path),
                         xlsx=str(xlsx_path), moxfield_txt=str(moxfield_txt_path),
-                        spend_summary=spend_summary)
+                        spend_summary=spend_summary, email_error=email_error)
                 exit_code = 0
 
             except Exception as exc:  # noqa: BLE001 — top-level: must never crash silently, must always try to email

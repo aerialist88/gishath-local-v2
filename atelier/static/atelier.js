@@ -85,9 +85,16 @@ function benchPersona(label) {
     const p = names[n] || ["A", "Apprentice"];
     return { initial: p[0], name: p[1], angle: angles[n] || "ideation bench" };
   }
+  // Checked BEFORE the generic "select" branch below — "select/mechanic-tokens"
+  // also starts with "select", so the order here matters (previously this
+  // branch was unreachable and every mechanic-token call showed up mislabeled
+  // as "The Guildmaster — choosing tonight's commander").
+  if (l.startsWith("select/mechanic") || l.includes("mechanic-token"))
+    return {
+      initial: "L", name: "The Lexicographer", angle: "naming the commander's mechanics",
+      quiet: "(a quick keyword pass — little to narrate here)",
+    };
   if (l.startsWith("select")) return { initial: "G", name: "The Guildmaster", angle: "choosing tonight's commander" };
-  if (l.startsWith("mechanic") || l.includes("synergy_tokens") || l.includes("token"))
-    return { initial: "S", name: "The Scrivener", angle: "naming the mechanics" };
   if (l.startsWith("synthesize")) return { initial: "S", name: "The Scrivener", angle: "merging the three angles" };
   if (l.startsWith("build")) return { initial: "B", name: "The Builder", angle: "drafting the hundred" };
   if (l.includes("synergy-repair")) return { initial: "M", name: "The Master Deckwright", angle: "synergy mending" };
@@ -95,7 +102,11 @@ function benchPersona(label) {
     return { initial: "M", name: "The Master Deckwright", angle: labelSuffix(l, "repair pass") };
   if (l.startsWith("optimize")) return { initial: "O", name: "The Optimizer", angle: "swap-delta passes" };
   if (l.startsWith("budget")) return { initial: "P", name: "The Purser", angle: "minding the per-card cap" };
-  if (l.startsWith("card_tag")) return { initial: "A", name: "The Archivist", angle: "tagging every card" };
+  if (l.startsWith("card_tag"))
+    return {
+      initial: "A", name: "The Archivist", angle: "tagging every card",
+      quiet: "(a quick labeling pass — little to narrate here)",
+    };
   return { initial: (label || "?")[0].toUpperCase(), name: label, angle: "at the bench" };
 }
 
@@ -299,17 +310,21 @@ function renderLive(snap, postMortem) {
     <div class="gauge" id="gauge">${gaugeHTML(gaugeIdx, snap)}</div>
     <div class="caps-lg live-section-title" id="benches-title">${benchesTitle(snap, active)}</div>
     <div class="live-cols">
-      <div class="benches" id="benches">${active.map((c) => benchHTML(c)).join("") || ""}</div>
+      <div class="benches" id="benches">${active.length ? active.map((c) => benchHTML(c)).join("") : (snap.status === "running" ? emptyBenchesHTML() : "")}</div>
       <aside style="display:flex;flex-direction:column;gap:14px">
         <div class="ledger" id="ledger">
           <div class="caps" style="margin-bottom:8px">Ledger — the night so far</div>
-          <div id="ledger-rows">${finished.map(ledgerRowHTML).join("")}</div>
+          <div id="ledger-rows">${finished.map((c) => ledgerRowHTML(c, false)).join("")}</div>
         </div>
         <div class="plaque-dark crucible" id="crucible">${crucibleHTML(cost)}</div>
         ${snap.status === "running" && !snap.demo ? `<button class="btn-ghost btn-rust" id="btn-abandon">Abandon commission</button>` : ""}
         ${snap.demo ? `<div class="fail-note">A rehearsal — scripted apprentices, not the real guild.</div>` : ""}
       </aside>
     </div>
+    ${(snap.budget_swaps || []).length ? `<div class="budget-swaps" id="budget-swaps">
+      <div class="caps-lg" style="margin-bottom:10px">Where the purse was minded — budget swaps</div>
+      ${snap.budget_swaps.map((sw) => swapRowHTML(sw, false)).join("")}
+    </div>` : `<div class="budget-swaps" id="budget-swaps"></div>`}
     <div id="delivered-slot">${snap.status === "delivered" ? deliveredHTML(snap) : ""}</div>
   </div>`;
 
@@ -355,11 +370,29 @@ function gaugeHTML(activeIdx, snap) {
   return GAUGE_STAGES.map((name, i) => {
     const cls = i < activeIdx ? "done" : i === activeIdx ? "active" : "";
     const glyph = i < activeIdx ? "✓" : i === activeIdx ? "⚙" : String(i + 1);
-    return `<div class="gauge-seg ${cls}">
+    return `<div class="gauge-seg ${cls}" data-idx="${i}">
       <div class="gauge-node"><div class="gauge-dot">${glyph}</div><div class="gauge-label">${name}</div></div>
       ${i < GAUGE_STAGES.length - 1 ? '<div class="gauge-rail"></div>' : ""}
     </div>`;
   }).join("");
+}
+
+/* Patches the ALREADY-RENDERED gauge nodes in place (classList + glyph text)
+   rather than rebuilding gaugeHTML() from scratch — the CSS transitions on
+   .gauge-dot/.gauge-rail/.gauge-label only animate when the same element
+   persists across the state change; a full rebuild would swap in a fresh
+   node already in its final state and nothing would visibly move. */
+function updateGaugeDOM(activeIdx) {
+  const gauge = $("#gauge");
+  if (!gauge) return;
+  gauge.querySelectorAll(".gauge-seg").forEach((seg) => {
+    const i = Number(seg.dataset.idx);
+    const dot = seg.querySelector(".gauge-dot");
+    const cls = i < activeIdx ? "done" : i === activeIdx ? "active" : "";
+    seg.classList.remove("done", "active");
+    if (cls) seg.classList.add(cls);
+    dot.textContent = i < activeIdx ? "✓" : i === activeIdx ? "⚙" : String(i + 1);
+  });
 }
 
 function benchesTitle(snap, active) {
@@ -374,16 +407,35 @@ function benchesTitle(snap, active) {
   return "At the bench";
 }
 
-function benchHTML(call) {
+/* Shown in #benches whenever no call is currently in flight (between
+   stages) — matches the "guild reads the commission" beat from the design
+   exploration, reused generically for any inter-stage gap rather than
+   one specific moment. */
+function emptyBenchesHTML() {
+  return `<div class="benches-waiting"><span></span><span></span><span></span></div>`;
+}
+
+function swapRowHTML(sw, animate) {
+  const addedStr = sw.added_price != null ? `SGD ${Number(sw.added_price).toFixed(2)}` : "unpriced";
+  return `<div class="swap-row${animate ? " entering" : ""}">
+    <span class="from">${esc(sw.remove)}</span><span class="arrow">→</span>
+    <span class="to">${esc(sw.add)}</span>
+    <span class="reason">${esc(sw.reason || "")} · ${addedStr}</span>
+  </div>`;
+}
+
+function benchHTML(call, entering) {
   const p = benchPersona(call.label);
-  return `<div class="bench ${call.is_error ? "errored" : ""}" data-label="${esc(call.label)}">
+  const hasText = !!(call.text_tail && call.text_tail.length);
+  const streamText = hasText ? esc(call.text_tail) : (p.quiet || "(waiting for the first line…)");
+  return `<div class="bench ${call.is_error ? "errored" : ""}${entering ? " bench-entering" : ""}" data-label="${esc(call.label)}">
     <div class="bench-head">
       <div class="bench-badge">${esc(p.initial)}</div>
       <div><div class="bench-name">${esc(p.name)}</div><div class="bench-angle">${esc(p.angle)}</div></div>
       <div class="head-spacer"></div>
       <span class="model-chip">${esc(call.model)}</span>
     </div>
-    <div class="bench-stream"><div><span class="stream-text">${esc(call.text_tail)}</span>${call.done ? "" : '<span class="caret"></span>'}</div></div>
+    <div class="bench-stream"><div><span class="stream-text${hasText ? "" : " placeholder"}">${streamText}</span>${call.done ? "" : '<span class="caret"></span>'}</div></div>
     <div class="bench-foot">
       <span class="pulse status">⚙ ${esc(call.status)}</span><span class="head-spacer"></span>
       <span class="meta">${call.done ? `${call.duration_s.toFixed(0)}s · $${call.cost_usd.toFixed(4)} · ${call.num_turns} turns` : ""}</span>
@@ -391,49 +443,129 @@ function benchHTML(call) {
   </div>`;
 }
 
-function ledgerRowHTML(call) {
+function ledgerRowHTML(call, entering) {
   const glyph = call.is_error ? "✕" : "✓";
   const cls = call.is_error ? "err" : "ok";
-  return `<div class="ledger-row"><span class="glyph ${cls}">${glyph}</span>
+  return `<div class="ledger-row${entering ? " entering" : ""}" data-label="${esc(call.label)}"><span class="glyph ${cls}">${glyph}</span>
     <span class="stage-name">${esc(call.label)}</span><span class="dotlead"></span>
     <span>${call.duration_s.toFixed(0)}s · $${call.cost_usd.toFixed(4)}</span></div>`;
 }
 
-function crucibleHTML(cost) {
-  const cap = (statusCache && statusCache.crucible_cap) || null;
+function crucibleCapUsd() {
   const s = statusCache && statusCache.knobs;
-  const capUsd = s && Number(s.max_run_spend_usd) > 0 ? Number(s.max_run_spend_usd) : null;
+  return s && Number(s.max_run_spend_usd) > 0 ? Number(s.max_run_spend_usd) : null;
+}
+
+function crucibleHTML(cost) {
+  const capUsd = crucibleCapUsd();
   const pct = capUsd ? Math.min(100, (cost / capUsd) * 100) : Math.min(100, cost * 20);
   return `<div class="caps" style="color:var(--brass);margin-bottom:8px">Crucible spend</div>
-    <div class="amount">$${cost.toFixed(4)}</div>
-    <div class="crucible-bar"><div style="width:${pct}%"></div></div>
+    <div class="amount" id="crucible-amount">$${cost.toFixed(4)}</div>
+    <div class="crucible-bar"><div id="crucible-fill" style="width:${pct}%"></div></div>
     <div class="mono" style="font-size:9.5px;color:var(--faint);margin-top:6px">${capUsd ? "cap $" + capUsd.toFixed(2) : "no cap set — Guild rules can set one"}</div>`;
+}
+
+/* Patches the existing crucible bar/amount nodes in place (not a fresh
+   crucibleHTML() re-render) so the width change actually transitions instead
+   of jumping — see .crucible-bar div's CSS transition. */
+function updateCrucibleDOM(cost) {
+  const amount = $("#crucible-amount");
+  const fill = $("#crucible-fill");
+  if (!amount || !fill) return;
+  amount.textContent = "$" + cost.toFixed(4);
+  const capUsd = crucibleCapUsd();
+  fill.style.width = (capUsd ? Math.min(100, (cost / capUsd) * 100) : Math.min(100, cost * 20)) + "%";
 }
 
 function deliveredHTML(snap) {
   const d = snap.delivered || {};
   const deckId = d.deck_id || "";
-  return `<div class="panel" style="margin-top:24px;padding:22px;display:flex;align-items:center;gap:20px">
-    <div>
-      <div class="caps-lg" style="margin-bottom:4px">Delivered</div>
-      <div class="serif" style="font-size:24px;font-weight:700">The commission is complete.</div>
-      <div class="mono" style="font-size:11px;color:var(--ink3);margin-top:6px">run cost $${(d.cost_usd || 0).toFixed(4)} · ${d.turns || 0} turns</div>
+  const commander = snap.concept ? snap.concept.commander : "";
+  return `<div class="panel" style="margin-top:24px;padding:22px;display:flex;flex-direction:column;gap:14px">
+    <div style="display:flex;align-items:center;gap:20px;perspective:600px">
+      <div class="art-ph flip-in" style="width:64px;height:88px" data-art="${esc(commander)}" data-art-kind="normal"><span>commander<br>art</span></div>
+      <div>
+        <span class="seal-badge" style="margin-bottom:8px">✓ Delivered</span>
+        <div class="serif" style="font-size:24px;font-weight:700;margin-top:8px">The commission is complete.</div>
+        <div class="mono" style="font-size:11px;color:var(--ink3);margin-top:6px">run cost $${(d.cost_usd || 0).toFixed(4)} · ${d.turns || 0} turns</div>
+      </div>
+      <div class="head-spacer"></div>
+      ${deckId ? `<button class="btn-brass" onclick="location.hash='#deck/${esc(deckId)}'">Open the deck &rarr;</button>` : ""}
+      <button class="btn-ghost" onclick="location.hash='#home'">Back to the atelier</button>
     </div>
-    <div class="head-spacer"></div>
-    ${deckId ? `<button class="btn-brass" onclick="location.hash='#deck/${esc(deckId)}'">Open the deck &rarr;</button>` : ""}
-    <button class="btn-ghost" onclick="location.hash='#home'">Back to the atelier</button>
+    ${d.email_error ? `<div class="warn-chip" style="align-self:flex-start"><span>⚠</span><span>The report email didn't send (saved locally instead) — ${esc(d.email_error)}</span></div>` : ""}
   </div>`;
 }
 
+/* Client-side mirror of RunEventLog's state — mirrors runner.py's
+   RunEventLog._apply() so structural events (a bench starting/finishing, a
+   stage advancing) can patch the ALREADY-RENDERED DOM in place instead of
+   re-fetching a snapshot and rebuilding the whole live view from scratch.
+   That full-rebuild approach (the original implementation) is why the
+   animation pass from the design exploration couldn't just be dropped in as
+   CSS: a fresh node has no "before" state for a transition to animate from,
+   and a one-shot entrance animation would replay on every single re-render
+   instead of once. Only delivered/failed (one true screen-shape change per
+   run) and a couple of defensive fallbacks still go through a full re-render. */
+let liveMirror = null;
+
+function applyEventToMirror(s, e) {
+  switch (e.type) {
+    case "run_started":
+      s.forced_commander = e.forced_commander ?? null;
+      s.demo = !!e.demo;
+      break;
+    case "stage":
+      s.stage = e.stage;
+      break;
+    case "concept":
+      s.concept = { commander: e.commander, archetype: e.archetype, rationale: e.rationale, colors: e.colors };
+      break;
+    case "budget_swaps":
+      s.budget_swaps = (s.budget_swaps || []).concat(e.swaps || []);
+      break;
+    case "call_started":
+      s.calls[e.label] = { label: e.label, model: e.model, text_tail: "", status: "thinking...",
+                           done: false, is_error: false, cost_usd: 0, num_turns: 0, duration_s: 0 };
+      s.call_order.push(e.label);
+      break;
+    case "call_text": {
+      const call = s.calls[e.label];
+      if (call) call.text_tail = (call.text_tail + e.chunk).slice(-4000);
+      break;
+    }
+    case "call_status": {
+      const call = s.calls[e.label];
+      if (call) call.status = e.status;
+      break;
+    }
+    case "call_finished": {
+      const call = s.calls[e.label];
+      if (call) Object.assign(call, { done: true, is_error: e.is_error, cost_usd: e.cost_usd,
+                                      num_turns: e.num_turns, duration_s: e.duration_s });
+      break;
+    }
+    // delivered/failed are handled by a full re-render (see applyLiveEvent) —
+    // no need to mirror their fields locally.
+  }
+}
+
 function subscribeLive(snap) {
+  // Defensive: two overlapping EventSources (e.g. a hashchange listener and
+  // an explicit route() call both landing on viewLive() in the same tick)
+  // would each independently apply every event, silently duplicating bench
+  // cards and doubling streamed text — close any prior connection first.
+  if (liveES) { liveES.close(); liveES = null; }
+  liveMirror = JSON.parse(JSON.stringify(snap)); // deep copy — this tab's own live-updating state
   const since = snap.next_seq || 0;
   const es = new EventSource(`/api/run/events?since=${since}`);
   liveES = es;
-  let needsRerender = false;
 
   es.onmessage = (msg) => {
     let e;
     try { e = JSON.parse(msg.data); } catch { return; }
+    if (typeof e.seq === "number" && e.seq < liveBaselineSeq) return; // already in the snapshot we rendered
+    applyEventToMirror(liveMirror, e);
     applyLiveEvent(e);
   };
   es.addEventListener("done", async () => {
@@ -448,8 +580,10 @@ function subscribeLive(snap) {
   es.onerror = () => { /* EventSource auto-reconnects; snapshot re-render on done covers gaps */ };
 }
 
-/* Incremental DOM updates for the hot path (token streaming); anything
-   structural falls back to a full snapshot re-render. */
+/* Defensive fallback only — used when an incremental patch expected a DOM
+   node that wasn't there (e.g. this tab missed an earlier event, or the
+   live view wasn't open yet when subscribeLive() started). Not part of the
+   normal per-event path anymore. */
 let rerenderQueued = false;
 async function rerenderSoon() {
   if (rerenderQueued) return;
@@ -459,35 +593,136 @@ async function rerenderSoon() {
     try {
       const fresh = await api("/api/run/snapshot");
       if ((location.hash || "#home").startsWith("#live")) renderLive(fresh, false);
-      if (fresh.status === "running" && !liveES) subscribeLive(fresh);
+      if (fresh.status === "running") {
+        if (!liveES) subscribeLive(fresh);
+        // subscribeLive() above already reset the mirror to `fresh` when it
+        // (re)subscribes; if we were already subscribed, do it here instead
+        // so the mirror doesn't drift from the DOM this fallback just redrew.
+        else liveMirror = JSON.parse(JSON.stringify(fresh));
+      }
     } catch { /* ignore */ }
   }, 120);
 }
 
+function refreshLiveStats() {
+  const calls = liveMirror.call_order.map((l) => liveMirror.calls[l]).filter(Boolean);
+  const finished = calls.filter((c) => c.done);
+  const cost = calls.reduce((sum, c) => sum + (c.cost_usd || 0), 0);
+  const statSpend = $("#stat-spend");
+  const statCalls = $("#stat-calls");
+  if (statSpend) statSpend.textContent = "$" + cost.toFixed(4);
+  if (statCalls) statCalls.textContent = finished.length + " / ~14";
+  updateCrucibleDOM(cost);
+}
+
+function refreshBenchesTitle() {
+  const el = $("#benches-title");
+  if (!el) return;
+  const active = liveMirror.call_order.map((l) => liveMirror.calls[l]).filter((c) => c && !c.done);
+  el.textContent = benchesTitle(liveMirror, active);
+}
+
+function appendBenchNode(call) {
+  const container = $("#benches");
+  if (!container) return;
+  if (container.querySelector(`.bench[data-label="${CSS.escape(call.label)}"]`)) return; // already there
+  const waiting = container.querySelector(".benches-waiting");
+  if (waiting) waiting.remove();
+  container.insertAdjacentHTML("beforeend", benchHTML(call, true));
+}
+
+/* Removes a finished call's bench card and appends its one-line ledger
+   summary in its place — the real-world analogue of the design's flaw rows
+   "resolving": the bench disappears, the fact that it happened persists. */
+function collapseCallToLedger(call) {
+  const rows = $("#ledger-rows");
+  if (rows && rows.querySelector(`.ledger-row[data-label="${CSS.escape(call.label)}"]`)) return; // already logged
+
+  const bench = document.querySelector(`.bench[data-label="${CSS.escape(call.label)}"]`);
+  if (bench) bench.remove();
+  const container = $("#benches");
+  if (container && !container.querySelector(".bench")) container.innerHTML = emptyBenchesHTML();
+
+  // "beforeend" — matches the bulk-render order (oldest first, top to bottom).
+  if (rows) rows.insertAdjacentHTML("beforeend", ledgerRowHTML(call, true));
+}
+
+function appendBudgetSwapRows(swaps) {
+  let panel = $("#budget-swaps");
+  if (!panel) return;
+  if (!panel.querySelector(".caps-lg")) {
+    panel.insertAdjacentHTML("beforeend",
+      `<div class="caps-lg" style="margin-bottom:10px">Where the purse was minded — budget swaps</div>`);
+  }
+  for (const sw of swaps) panel.insertAdjacentHTML("beforeend", swapRowHTML(sw, true));
+}
+
 function applyLiveEvent(e) {
-  if (typeof e.seq === "number" && e.seq < liveBaselineSeq) return; // already in the snapshot we rendered
+  // Text/status patches stay exactly as before — highest-frequency path,
+  // already correct (direct textContent mutation on a persisting node).
   switch (e.type) {
     case "call_text": {
       const bench = document.querySelector(`.bench[data-label="${CSS.escape(e.label)}"] .stream-text`);
       if (bench) {
+        if (bench.classList.contains("placeholder")) {
+          // First real chunk after the "(waiting for the first line…)" filler —
+          // clear it rather than prepending real text onto the placeholder.
+          bench.classList.remove("placeholder");
+          bench.textContent = "";
+        }
         bench.textContent = (bench.textContent + e.chunk).slice(-1200);
       } else rerenderSoon();
-      break;
+      return;
     }
     case "call_status": {
       const el = document.querySelector(`.bench[data-label="${CSS.escape(e.label)}"] .status`);
       if (el) el.textContent = "⚙ " + e.status; else rerenderSoon();
+      return;
+    }
+  }
+
+  if (!liveMirror || !(location.hash || "#home").startsWith("#live")) return; // not on the live screen — nothing to patch
+  if (!$("#gauge")) { rerenderSoon(); return; } // live screen not actually painted yet — fall back once
+
+  switch (e.type) {
+    case "stage":
+      updateGaugeDOM(currentGaugeIndex(liveMirror));
+      refreshBenchesTitle();
+      break;
+    case "concept": {
+      const nameEl = $("#cp-name"), conceptEl = $("#cp-concept"), pillsEl = $("#cp-pills");
+      if (nameEl) nameEl.textContent = e.commander;
+      if (conceptEl) conceptEl.textContent = e.rationale || e.archetype;
+      if (pillsEl) pillsEl.innerHTML = conceptPills({ colors: e.colors, archetype: e.archetype });
+      const art = document.querySelector(".commission-plaque .art-ph");
+      if (art) art.dataset.art = e.commander;
+      fillArt(document.querySelector(".commission-plaque"));
       break;
     }
-    case "call_started":
-    case "call_finished":
-    case "stage":
-    case "concept":
+    case "call_started": {
+      const call = liveMirror.calls[e.label];
+      if (call) appendBenchNode(call);
+      updateGaugeDOM(currentGaugeIndex(liveMirror));
+      refreshBenchesTitle();
+      break;
+    }
+    case "call_finished": {
+      const call = liveMirror.calls[e.label];
+      if (call) collapseCallToLedger(call);
+      updateGaugeDOM(currentGaugeIndex(liveMirror));
+      refreshLiveStats();
+      refreshBenchesTitle();
+      break;
+    }
+    case "budget_swaps":
+      appendBudgetSwapRows(e.swaps || []);
+      break;
     case "delivered":
     case "failed":
-    case "announce":
-      rerenderSoon();
+      rerenderSoon(); // one true screen-shape change per run — a full redraw is correct here
       break;
+    case "announce":
+      break; // no visible surface in this UI (yet)
   }
 }
 
@@ -540,7 +775,7 @@ function renderFailure(snap, postMortem) {
       <aside style="display:flex;flex-direction:column;gap:14px">
         <div class="ledger">
           <div class="caps" style="margin-bottom:8px">Ledger — how the night went</div>
-          ${finished.map(ledgerRowHTML).join("") || '<div class="ledger-row">· no calls completed</div>'}
+          ${finished.map((c) => ledgerRowHTML(c, false)).join("") || '<div class="ledger-row">· no calls completed</div>'}
         </div>
         <div class="plaque-dark crucible dry">
           <div class="caps" style="color:#c98a5a;margin-bottom:8px">Crucible spend${isCap ? " — dry" : ""}</div>

@@ -54,8 +54,9 @@ wholesale.
 $edhrec_pool_block
 
 Respond only via the provided JSON schema — a flat list of exactly $deck_size_minus_1 card name
-strings. IMPORTANT (token diet, PRD v4 amendment T2): before calling the structured-output tool,
-keep any reasoning/planning text you write brief — a short plan of your overall approach, capped
-at roughly 150 words. Do NOT enumerate the decklist, or any large portion of it, in that reasoning
-text — writing is fine for thinking through the plan, but the actual card names belong ONLY in the
-structured JSON output, not written out twice.
+strings. Before calling the structured-output tool, narrate your reasoning out loud — this streams
+live to whoever is watching the commission, so make it genuinely worth reading: your read on the
+build brief, how you're shaping the manabase and curve, which packages/synergies you're leaning on
+and why, any tensions you're weighing. Write a few real paragraphs, not one line. Do NOT enumerate
+the decklist, or any large portion of it, in that reasoning text — the actual card names belong
+ONLY in the structured JSON output, not written out twice.
