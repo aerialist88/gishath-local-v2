@@ -163,6 +163,19 @@ _loop: Optional[asyncio.AbstractEventLoop] = None
 _loop_thread: Optional[threading.Thread] = None
 _MAX_CONCURRENT_PAGES = 10
 _semaphore: Optional[asyncio.Semaphore] = None
+
+# Agora Hobby's search endpoint is real (not Cloudflare-blocked) but slow and
+# highly variable — repeated probes of the identical query ranged 7s to nearly
+# 30s. It shares PAGE_TIMEOUT/GOTO_ATTEMPTS with every other store, so a slow
+# request can hold a page slot for up to ~40s (2 goto attempts). Routing it
+# through the same _semaphore as the other 9 (fast, 2-5s) stores let it
+# monopolize shared browser-page slots and was a major contributor to
+# search_many_playwright blowing app.py's SEARCH_BUDGET_SECONDS. Giving it its
+# own small semaphore means its slowness can only cannibalize its own budget.
+AGORA_STORE_NAME = "Agora Hobby"
+_AGORA_MAX_CONCURRENT_PAGES = 2
+_agora_semaphore: Optional[asyncio.Semaphore] = None
+
 _browser_lock: Optional[asyncio.Lock] = None  # guards relaunch — created lazily on the playwright loop
 
 PAGE_TIMEOUT = 20_000   # ms — per-page navigation timeout
@@ -212,7 +225,7 @@ def run_async(coro):
 
 
 async def _init_browser() -> None:
-    global _browser, _playwright_ctx, _semaphore
+    global _browser, _playwright_ctx, _semaphore, _agora_semaphore
     from playwright.async_api import async_playwright
 
     _playwright_ctx = async_playwright()
@@ -226,7 +239,18 @@ async def _init_browser() -> None:
         ],
     )
     _semaphore = asyncio.Semaphore(_MAX_CONCURRENT_PAGES)
+    _agora_semaphore = asyncio.Semaphore(_AGORA_MAX_CONCURRENT_PAGES)
     log.info("Chromium launched (headless).")
+
+
+def _page_semaphore_for(store: StoreConfig) -> asyncio.Semaphore:
+    """Which page-load semaphore a store's Playwright scrape should use.
+
+    Agora Hobby gets its own small pool (see _agora_semaphore) so its slow,
+    highly-variable search endpoint can't starve the other 9 stores of shared
+    browser-page slots.
+    """
+    return _agora_semaphore if store.name == AGORA_STORE_NAME else _semaphore
 
 
 async def _close_browser() -> None:
@@ -779,7 +803,7 @@ async def _scrape_with_playwright(store: StoreConfig, card_name: str) -> list[di
         4: "div#store_listingcontainer div.store-item",
     }[store.variant]
 
-    async with _semaphore:
+    async with _page_semaphore_for(store):
         for attempt in range(1, GOTO_ATTEMPTS + 1):
             page = await _new_stealth_page()
             try:
@@ -979,7 +1003,7 @@ async def debug_store(store: StoreConfig, card_name: str) -> dict:
             return result
 
         js    = {1: _JS_VARIANT1, 2: _JS_VARIANT2, 3: _JS_VARIANT3, 4: _JS_VARIANT4}[store.variant]
-        async with _semaphore:
+        async with _page_semaphore_for(store):
             page = await _new_stealth_page()
             try:
                 await page.goto(url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")

@@ -244,5 +244,17 @@
       "W"
     ],
     "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-07T13:10:29.292886+00:00",
+    "commander": "Queza, Augur of Agonies",
+    "archetype": "Esper draw-triggered drain with lifegain-payoff cascade (wheels finish)",
+    "status": "success",
+    "colors": [
+      "B",
+      "U",
+      "W"
+    ],
+    "error_summary": ""
   }
 ]
