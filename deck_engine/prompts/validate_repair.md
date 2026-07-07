@@ -12,3 +12,9 @@ every issue listed above while keeping as much of the original gameplan intact a
 Replace only the problem cards — do not rebuild the whole deck from scratch unless the notes
 require it. Respond only via the provided JSON schema — a flat list of exactly
 $deck_size_minus_1 card name strings.
+
+Before calling the structured-output tool, briefly narrate what you're fixing — which cards
+are coming out, what's replacing them, and why each replacement resolves its issue. This
+streams live to whoever is watching the commission. Keep it to a few sentences per fix, and
+do NOT enumerate the rest of the decklist — the full list belongs only in the structured
+output.

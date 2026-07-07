@@ -84,7 +84,8 @@ class RunEventLog:
         elif etype == "budget_swaps":
             s.setdefault("budget_swaps", []).extend(e.get("swaps") or [])
         elif etype == "call_started":
-            call = {"label": e["label"], "model": e["model"], "text_tail": "", "status": "thinking...",
+            call = {"label": e["label"], "model": e["model"], "text_tail": "", "thinking_tail": "",
+                    "status": "thinking...",
                     "done": False, "is_error": False, "cost_usd": 0.0, "num_turns": 0,
                     "duration_s": 0.0, "started_at": e["t"]}
             s["calls"][e["label"]] = call
@@ -93,6 +94,10 @@ class RunEventLog:
             call = s["calls"].get(e["label"])
             if call is not None:
                 call["text_tail"] = (call["text_tail"] + e["chunk"])[-_TEXT_TAIL_CHARS:]
+        elif etype == "call_thinking":
+            call = s["calls"].get(e["label"])
+            if call is not None:
+                call["thinking_tail"] = (call["thinking_tail"] + e["chunk"])[-_TEXT_TAIL_CHARS:]
         elif etype == "call_status":
             call = s["calls"].get(e["label"])
             if call is not None:
@@ -167,6 +172,9 @@ class _CallHandle:
 
     def append_text(self, chunk: str) -> None:
         self._log.emit("call_text", label=self._label, chunk=chunk)
+
+    def append_thinking(self, chunk: str) -> None:
+        self._log.emit("call_thinking", label=self._label, chunk=chunk)
 
     def set_status(self, status: str) -> None:
         self._log.emit("call_status", label=self._label, status=status)

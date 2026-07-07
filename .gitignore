@@ -1,4 +1,5 @@
 bin/
+engine-src/
 venv/
 __pycache__/
 *.pyc

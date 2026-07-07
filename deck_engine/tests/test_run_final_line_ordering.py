@@ -96,7 +96,7 @@ def test_failure_path() -> bool:
     out = buf.getvalue()
     last_line = _last_nonempty_line(out)
 
-    ok = exit_code == 1 and "FAILED at stage 'ideate/build/validate/optimize'" in last_line
+    ok = exit_code == 1 and "FAILED at stage 'draft/judge/validate/optimize'" in last_line
     if not ok:
         print(f"FAILED failure path: exit_code={exit_code} last_line={last_line!r}", file=sys.stderr)
     return ok

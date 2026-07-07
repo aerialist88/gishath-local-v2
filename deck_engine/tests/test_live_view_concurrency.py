@@ -1,5 +1,5 @@
 """Ad-hoc check (not wired into any CI) that LiveView survives real concurrent
-updates the way _ideate()'s ThreadPoolExecutor(max_workers=3) actually drives
+updates the way _draft()'s ThreadPoolExecutor(max_workers=3) actually drives
 claude_cli.run() — 3 threads all calling start_call()/append_text()/finish()
 on the same LiveView at once. Uses fake_claude.py to replay the real captured
 transcript 3x in parallel rather than guessing at timing. Run manually:
@@ -37,8 +37,8 @@ def main() -> int:
     def _one(i: int) -> None:
         try:
             result = claude_cli.run(
-                f"fake ideation prompt {i}", run_id=run_id, stage=f"ideate/attempt1/{i + 1}",
-                model_tier_key="ideate", json_schema={"type": "object"},
+                f"fake draft prompt {i}", run_id=run_id, stage=f"draft/attempt1/{i + 1}",
+                model_tier_key="draft", json_schema={"type": "object"},
             )
             assert result.text or result.raw.get("structured_output") is not None, (
                 f"pane {i}: got no text and no structured_output"

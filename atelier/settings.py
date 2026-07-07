@@ -17,7 +17,7 @@ import json
 
 from deck_engine import config
 
-_TIER_STAGES = ["select", "ideate", "build", "validate_repair", "optimize", "card_tagger"]
+_TIER_STAGES = ["select", "draft", "judge", "validate_repair", "optimize", "card_tagger"]
 _VALID_TIERS = ("haiku", "sonnet", "opus")
 _VALID_BRACKETS = ("1", "2", "3", "3-4", "4", "5")
 

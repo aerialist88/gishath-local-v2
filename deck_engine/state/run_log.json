@@ -167,5 +167,82 @@
     "status": "error",
     "colors": [],
     "error_summary": "[deliver] Email send failed (EmailConfigError: DECK_ENGINE_EMAIL_FROM is not set \u2014 set it to a Gmail address with an App Password (see deck_engine/emailer.py docstring).). Report saved to /Users/trevorjow/Desktop/Cowork Playground/Local Gishath Fetch/gishath-local-v2/deck_engine/logs/UNSENT_2026-07-05_02-54-30_EDH Nightly 14  Ms Bumbleflower SGD 46758.txt instead."
+  },
+  {
+    "timestamp": "2026-07-05T07:39:37.307617+00:00",
+    "commander": "Kros, Defense Contractor",
+    "archetype": "Bant (GUW) proliferate-goad combat politics \u2014 shield-counter hooks",
+    "status": "success",
+    "colors": [
+      "G",
+      "U",
+      "W"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-05T13:38:30.748303+00:00",
+    "commander": "Iron Man, Titan of Innovation",
+    "archetype": "Izzet (UR) artifact \"staircase\" stax-prison \u2014 a sacrifice-fueled +1 mana-value tutor ladder that climbs into a one-sided lock",
+    "status": "success",
+    "colors": [
+      "R",
+      "U"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-05T13:56:26.935936+00:00",
+    "commander": "Marchesa, Dealer of Death",
+    "archetype": "Grixis crimes-matter reanimator-control (The Body Broker)",
+    "status": "success",
+    "colors": [
+      "B",
+      "R",
+      "U"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-06T02:40:05.397048+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[ideate/build/validate/optimize] [build/attempt1/repair-1] claude -p returned is_error=true: You've hit your monthly spend limit \u00b7 raise it at claude.ai/settings/usage"
+  },
+  {
+    "timestamp": "2026-07-06T05:54:32.457309+00:00",
+    "commander": "Yenna, Redtooth Regent",
+    "archetype": "Selesnya enchantress Aura-toolbox \u2014 Yenna Aura-copy untap-chain value engine",
+    "status": "success",
+    "colors": [
+      "G",
+      "W"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-06T10:43:49.609539+00:00",
+    "commander": "Roxanne, Starfall Savant",
+    "archetype": "Gruul Meteorite tokens \u2014 ETB burn + doubled-mana ramp into X-spell finishers",
+    "status": "success",
+    "colors": [
+      "G",
+      "R"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-07T00:37:42.088182+00:00",
+    "commander": "Zurgo and Ojutai",
+    "archetype": "Jeskai Dragon ETB tempo & recursion",
+    "status": "success",
+    "colors": [
+      "R",
+      "U",
+      "W"
+    ],
+    "error_summary": ""
   }
 ]

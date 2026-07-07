@@ -1,7 +1,22 @@
 """
 deck_engine/agent_pipeline.py — stages 2-5 of the nightly pipeline (PRD §5):
-ideate -> synthesize -> build -> validate/repair -> optimize -> re-validate
+draft (×N parallel, each builds a complete deck) -> judge (picks the winner,
+cherry-picks from the losers) -> validate/repair -> optimize -> re-validate
 -> synergy gate/repair.
+
+WIDEN-BACK-OUT (2026-07-06, Trevor's call): the original PRD vision of three
+simultaneous agents — previously compressed to 3 quick ideate calls feeding a
+single synthesize->build track — is restored as the draft stage: each of the
+3 agents commits to an angle AND drafts the full 99 cards in one long call,
+so the Atelier benches show three deckwrights genuinely working in parallel
+for most of the run. Synthesize's pick/merge role became the judge stage
+(full-deck comparison + surgical cherry-pick swaps applied in code). Roughly
+cost-neutral vs the old shape: 3 big sonnet drafts replace 3 small ideates +
+1 big build. Two behaviour changes to know about: web search is now blocked
+at the angle-exploration stage (it rides inside the build-shaped draft call —
+T5 policy — where the old standalone ideate had it enabled), and synthesize's
+S2 role-quota adjustment is retired (drafts get the config defaults; the
+prompt lets them argue for deviating).
 
 Concept selection (stage 1) lives in concept_selector.py; pricing/export/
 delivery (stages 6-9) live in pricing.py / export.py / emailer.py. This
@@ -21,7 +36,7 @@ instead of its training-data memory of the card, which can be wrong. The
 `optimize` stage additionally does an explicit fact-check pass (job 1,
 before any card review) comparing the build brief's claimed synergies
 against that real text; if it finds the core gameplan was built on a false
-premise, `run_pipeline()` retries the whole ideate->optimize loop once
+premise, `run_pipeline()` retries the whole draft->optimize loop once
 (config.MAX_STRATEGY_RETRIES) with a note about what went wrong, rather than
 patching individual cards (a false premise isn't a card-level bug).
 
@@ -99,46 +114,24 @@ def _role_quota_block(quotas: dict) -> str:
     )
 
 
-IDEATE_JSON_SCHEMA = {
+DRAFT_JSON_SCHEMA = {
     "type": "object",
     "properties": {
         "angle_name": {"type": "string"},
         "gameplan_summary": {"type": "string"},
-        "key_cards_or_themes": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": ["angle_name", "gameplan_summary", "key_cards_or_themes"],
-}
-
-SYNTHESIZE_JSON_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "chosen_angle_name": {"type": "string"},
-        "build_brief": {"type": "string"},
         "key_cards": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "5-10 exact, real card names this gameplan depends on — used to pull real "
-                           "oracle text as ground truth for the builder.",
+            "description": "5-10 exact, real card names this draft's gameplan depends on — the judge "
+                           "gets their real oracle text as ground truth.",
         },
-        "role_quotas": {
-            "type": "object",
-            "description": "PRD v4 amendment S2: role-count RANGES for the builder to target, adjusted "
-                           "from the defaults only if this specific build brief genuinely calls for it. "
-                           "Defaults: 35-38 lands, 10-12 ramp, 8-10 draw, 8-10 interaction, 2-3 wipes, "
-                           ">=28 on-mechanic.",
-            "properties": {
-                "land_min": {"type": "integer"}, "land_max": {"type": "integer"},
-                "ramp_min": {"type": "integer"}, "ramp_max": {"type": "integer"},
-                "draw_min": {"type": "integer"}, "draw_max": {"type": "integer"},
-                "interaction_min": {"type": "integer"}, "interaction_max": {"type": "integer"},
-                "wipes_min": {"type": "integer"}, "wipes_max": {"type": "integer"},
-                "on_mechanic_min": {"type": "integer"},
-            },
-            "required": ["land_min", "land_max", "ramp_min", "ramp_max", "draw_min", "draw_max",
-                         "interaction_min", "interaction_max", "wipes_min", "wipes_max", "on_mechanic_min"],
+        "cards": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "The complete decklist (commander excluded), exact printed names.",
         },
     },
-    "required": ["chosen_angle_name", "build_brief", "key_cards", "role_quotas"],
+    "required": ["angle_name", "gameplan_summary", "key_cards", "cards"],
 }
 
 DECKLIST_JSON_SCHEMA = {
@@ -157,6 +150,34 @@ SWAP_JSON_SCHEMA_ITEM = {
         "reason": {"type": "string"},
     },
     "required": ["remove", "add", "reason"],
+}
+
+JUDGE_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "chosen_draft": {
+            "type": "integer",
+            "description": "1-based number of the winning draft.",
+        },
+        "build_brief": {
+            "type": "string",
+            "description": "The winning deck's gameplan brief — the reference document the optimize "
+                           "stage later fact-checks the deck against.",
+        },
+        "key_cards": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "5-10 exact, real card names the winning gameplan depends on — used to pull "
+                           "real oracle text as ground truth for every later stage.",
+        },
+        "swaps": {
+            "type": "array",
+            "description": "Surgical cherry-picks applied to the WINNING draft's list (typically cards "
+                           "borrowed from losing drafts). Empty list if the winner is already coherent.",
+            "items": SWAP_JSON_SCHEMA_ITEM,
+        },
+    },
+    "required": ["chosen_draft", "build_brief", "key_cards", "swaps"],
 }
 
 OPTIMIZE_JSON_SCHEMA = {
@@ -266,97 +287,117 @@ class DeckResult:
     synergy_gate_fired: bool = False                             # S3 — for tracking the "<1 in 5 runs" target
 
 
-def _ideate(run_id: str, concept: ConceptChoice, attempt: int, retry_note: str = "") -> list[dict]:
-    """Spawn IDEATION_SUBAGENTS parallel angle proposals (PRD §5 step 2). Deliberately
+def _draft(
+    run_id: str, concept: ConceptChoice, attempt: int, edhrec_pool_text: str, retry_note: str = "",
+) -> list[dict]:
+    """Spawn DRAFT_SUBAGENTS parallel drafting agents (the 2026-07-06 widen-back-out:
+    each agent commits to one angle AND builds a complete decklist in a single long
+    call, so all three benches visibly work simultaneously for the bulk of the run —
+    replacing the old quick ideate×3 → synthesize → single-build chain). Deliberately
     NOT session-chained even when config.RESUME_SESSION_CHAINING is on — these are
-    independent parallel explorations by design (T1's future collapse-to-1-call
-    trial is the mechanism for reconsidering that, not T6's --resume experiment)."""
-    n = config.IDEATION_SUBAGENTS
-    color_identity = ", ".join(concept.color_identity) or "colorless"
+    independent parallel explorations by design.
 
-    _log(f"ideate: spawning {n} parallel angle proposals (model tier: {config.MODEL_TIERS['ideate']})...")
+    Search is disallowed here: this call is build-shaped (T5 — grounding comes from
+    the oracle text + EDHREC pool), and 3 parallel search-enabled builds could blow
+    the crucible cap on a bad night. This retires the old ideate stage's
+    search-enabled policy along with the stage itself."""
+    n = config.DRAFT_SUBAGENTS
+    color_identity = ", ".join(concept.color_identity) or "colorless"
+    quotas = dict(config.ROLE_QUOTA_DEFAULTS)
+
+    _log(f"draft: spawning {n} parallel deck drafts (model tier: {config.MODEL_TIERS['draft']})...")
 
     def _one(i: int) -> dict:
         prompt = prompt_helpers.render(
-            "ideate.md",
+            "draft.md",
             commander=concept.commander, color_identity=color_identity,
             archetype=concept.archetype, rationale=concept.rationale,
             commander_oracle_text=concept.oracle_text or "(no oracle text on file for this card)",
             angle_index=i + 1, angle_total=n, retry_note=retry_note,
+            deck_size_minus_1=config.DECK_SIZE - 1,
+            role_quota_block=_role_quota_block(quotas),
+            on_mechanic_min=quotas["on_mechanic_min"],
+            edhrec_pool_block=edhrec_pool_text,
             **prompt_helpers.bracket_rules_text(),
         )
         t0 = time.monotonic()
-        result = claude_cli.run(prompt, run_id=run_id, stage=f"ideate/attempt{attempt}/{i + 1}",
-                                 model_tier_key="ideate", json_schema=IDEATE_JSON_SCHEMA)
+        result = claude_cli.run(
+            prompt, run_id=run_id, stage=f"draft/attempt{attempt}/{i + 1}",
+            model_tier_key="draft", json_schema=DRAFT_JSON_SCHEMA,
+            disallowed_tools=config.DISALLOWED_SEARCH_TOOLS,
+        )
         parsed = result.parsed_json()
-        _log(f"ideate {i + 1}/{n} done in {time.monotonic() - t0:.0f}s — angle: {parsed.get('angle_name', '?')}")
+        _log(f"draft {i + 1}/{n} done in {time.monotonic() - t0:.0f}s — "
+             f"angle: {parsed.get('angle_name', '?')}, {len(parsed.get('cards', []))} cards")
         return parsed
 
     # Subprocess calls are I/O-bound (waiting on the API), so a thread pool
-    # is enough — no need for asyncio here. NOTE: pool.map() means one
-    # angle's exception kills the whole batch, even if the other two already
-    # succeeded (and their cost is already spent) — a known gap, worth
-    # hardening to collect partial successes if this fires often in practice.
+    # is enough — no need for asyncio here. Each future is resolved
+    # individually (not via pool.map(), whose iterator raises on the first
+    # exception and discards any already-successful results) so one drafter
+    # failing doesn't waste the cost already spent by its siblings — the
+    # judge just works with whoever survived.
     with concurrent.futures.ThreadPoolExecutor(max_workers=n) as pool:
-        return list(pool.map(_one, range(n)))
+        futures = [pool.submit(_one, i) for i in range(n)]
+        results = []
+        for i, future in enumerate(futures):
+            try:
+                results.append(future.result())
+            except Exception as exc:  # noqa: BLE001 — one drafter's failure shouldn't sink the others
+                _log(f"draft {i + 1}/{n} failed: {exc} — continuing with the survivors")
+    if not results:
+        raise RuntimeError(f"all {n} parallel drafts failed — nothing for the judge to compare")
+    if len(results) < n:
+        _log(f"draft: {n - len(results)}/{n} drafter(s) failed, proceeding with {len(results)} surviving draft(s)")
+    return results
 
 
-def _synthesize(
-    run_id: str, concept: ConceptChoice, angles: list[dict], attempt: int,
-) -> tuple[str, list[str], dict, str]:
-    """Main agent picks/merges the best angle into a build brief + key_cards list +
-    role_quotas (PRD §5, between steps 2-3; role_quotas added by S2). Returns
-    (build_brief, key_cards, role_quotas, session_id) — session_id is only used if
+def _judge(
+    run_id: str, concept: ConceptChoice, drafts: list[dict], cache: dict, attempt: int,
+) -> tuple[int, list[str], str, list[str], list[str], str]:
+    """Judge the parallel drafts: pick the winning deck, cherry-pick strict upgrades
+    from the losers (applied in code via _apply_swaps, same trust model as optimize's
+    T3 swaps), and write the build brief + key_cards that every later stage works
+    from. Replaces the old synthesize stage. Returns (chosen_index, winning_cards,
+    build_brief, key_cards, swap_warnings, session_id) — session_id is only used if
     config.RESUME_SESSION_CHAINING is on (T6 scaffolding)."""
-    angles_block = "\n\n".join(
-        f"Angle {i + 1} — {a.get('angle_name', '?')}:\n{a.get('gameplan_summary', '')}\n"
-        f"Key cards/themes: {', '.join(a.get('key_cards_or_themes', []))}"
-        for i, a in enumerate(angles)
-    )
+    tokens = concept.mechanic_tokens
+    blocks = []
+    for i, d in enumerate(drafts):
+        cards = d.get("cards", [])
+        # Code-computed on-mechanic signal per draft — same counter the S3 synergy
+        # gate uses later, handed to the judge as evidence rather than asking it
+        # to eyeball 3×99 names for mechanic overlap.
+        _, match_count, _ = synergy_check.gate_passes(cards, tokens, cache)
+        blocks.append(
+            f"Draft {i + 1} — {d.get('angle_name', '?')}\n"
+            f"Gameplan: {d.get('gameplan_summary', '')}\n"
+            f"On-mechanic count (code-computed): {match_count} of {len(cards)} cards\n"
+            f"Key cards' real printed text:\n{_oracle_text_block(cache, d.get('key_cards', []))}\n"
+            f"Decklist ({len(cards)} cards):\n" + "\n".join(f"- {c}" for c in cards)
+        )
     prompt = prompt_helpers.render(
-        "synthesize.md",
+        "judge.md",
         commander=concept.commander, color_identity=", ".join(concept.color_identity) or "colorless",
         archetype=concept.archetype,
         commander_oracle_text=concept.oracle_text or "(no oracle text on file for this card)",
-        angle_total=len(angles), angles_block=angles_block,
+        draft_total=len(drafts), drafts_block="\n\n".join(blocks),
     )
-    _log("synthesize: picking/merging the best angle into a build brief...")
+    _log(f"judge: comparing {len(drafts)} drafts (model tier: {config.MODEL_TIERS['judge']})...")
     t0 = time.monotonic()
-    result = claude_cli.run(prompt, run_id=run_id, stage=f"synthesize/attempt{attempt}",
-                             model_tier_key="ideate", json_schema=SYNTHESIZE_JSON_SCHEMA)
+    result = claude_cli.run(prompt, run_id=run_id, stage=f"judge/attempt{attempt}",
+                             model_tier_key="judge", json_schema=JUDGE_JSON_SCHEMA)
     parsed = result.parsed_json()
-    _log(f"synthesize done in {time.monotonic() - t0:.0f}s")
-    return parsed.get("build_brief", ""), parsed.get("key_cards", []), parsed.get("role_quotas", {}), result.session_id
 
-
-def _build(
-    run_id: str, concept: ConceptChoice, build_brief: str, key_cards_oracle_text: str, attempt: int,
-    role_quotas: dict, edhrec_pool_text: str, resume_session_id: str | None = None,
-) -> tuple[list[str], str]:
-    quotas = {**config.ROLE_QUOTA_DEFAULTS, **(role_quotas or {})}
-    prompt = prompt_helpers.render(
-        "build.md",
-        commander=concept.commander, color_identity=", ".join(concept.color_identity) or "colorless",
-        archetype=concept.archetype, build_brief=build_brief,
-        commander_oracle_text=concept.oracle_text or "(no oracle text on file for this card)",
-        key_cards_oracle_text=key_cards_oracle_text,
-        deck_size_minus_1=config.DECK_SIZE - 1,
-        role_quota_block=_role_quota_block(quotas),
-        on_mechanic_min=quotas["on_mechanic_min"],
-        edhrec_pool_block=edhrec_pool_text,
-        **prompt_helpers.bracket_rules_text(),
-    )
-    _log(f"build: generating the {config.DECK_SIZE - 1}-card decklist (model tier: {config.MODEL_TIERS['build']})...")
-    t0 = time.monotonic()
-    result = claude_cli.run(
-        prompt, run_id=run_id, stage=f"build/attempt{attempt}",
-        model_tier_key="build", json_schema=DECKLIST_JSON_SCHEMA,
-        disallowed_tools=config.DISALLOWED_SEARCH_TOOLS,  # T5: no search at build — grounding comes from oracle text/EDHREC pool
-        resume_session_id=resume_session_id if config.RESUME_SESSION_CHAINING else None,  # T6 scaffolding
-    )
-    cards = result.parsed_json().get("cards", [])
-    _log(f"build done in {time.monotonic() - t0:.0f}s — {len(cards)} cards returned")
-    return cards, result.session_id
+    chosen = parsed.get("chosen_draft", 1)
+    if not isinstance(chosen, int) or not (1 <= chosen <= len(drafts)):
+        chosen = 1  # a nonsense index must never crash the run — fall back to draft 1
+    winning_cards = list(drafts[chosen - 1].get("cards", []))
+    winning_cards, swap_warnings = _apply_swaps(winning_cards, parsed.get("swaps", []))
+    _log(f"judge done in {time.monotonic() - t0:.0f}s — chose draft {chosen} "
+         f"({drafts[chosen - 1].get('angle_name', '?')}), {len(parsed.get('swaps', []))} cherry-pick(s)")
+    return (chosen, winning_cards, parsed.get("build_brief", ""), parsed.get("key_cards", []),
+            swap_warnings, result.session_id)
 
 
 def _validate_and_repair(
@@ -479,44 +520,55 @@ def _synergy_gate_and_repair(
 def _run_one_attempt(
     run_id: str, concept: ConceptChoice, cache: dict, attempt: int, retry_note: str,
 ) -> tuple[dict, list[str], ValidationResult, list[dict], list[str], bool, bool]:
-    """One full ideate->synthesize->build->validate/repair->optimize->synergy-gate
-    pass. Returns (optimized_response, final_cards, final_validation, ideation_angles,
+    """One full draft×N->judge->validate/repair->optimize->synergy-gate pass.
+    Returns (optimized_response, final_cards, final_validation, ideation_angles,
     swap_warnings, edhrec_pool_used, synergy_gate_fired) — caller checks
     optimized_response["strategy_valid"] to decide whether to accept or retry."""
-    angles = _ideate(run_id, concept, attempt, retry_note=retry_note)
-    build_brief, key_cards, role_quotas, synthesize_session_id = _synthesize(run_id, concept, angles, attempt)
-    key_cards_oracle_text = _oracle_text_block(cache, key_cards)
-
-    # S1: EDHREC candidate pool for the build prompt — never on the critical path
-    # (pool_block() degrades to a "no pool" placeholder + pool_used=False on any
-    # fetch failure or thin-data commander; see edhrec_pool.py).
+    # S1: EDHREC candidate pool, now fetched BEFORE the drafts since every parallel
+    # drafter builds from it — never on the critical path (pool_block() degrades to
+    # a "no pool" placeholder + pool_used=False on any fetch failure or thin-data
+    # commander; see edhrec_pool.py).
     edhrec_pool_text, edhrec_pool_used = edhrec_pool.pool_block(concept.commander, cache)
 
-    raw_cards, build_session_id = _build(
-        run_id, concept, build_brief, key_cards_oracle_text, attempt, role_quotas, edhrec_pool_text,
-        resume_session_id=synthesize_session_id,
+    drafts = _draft(run_id, concept, attempt, edhrec_pool_text, retry_note=retry_note)
+    chosen, raw_cards, build_brief, key_cards, judge_swap_warnings, judge_session_id = _judge(
+        run_id, concept, drafts, cache, attempt,
     )
+    key_cards_oracle_text = _oracle_text_block(cache, key_cards)
+
+    # Kept under the old name for the email/debug trail — same shape as the old
+    # ideate angles, plus which draft won.
+    angles = [
+        {"angle_name": d.get("angle_name", "?"), "gameplan_summary": d.get("gameplan_summary", ""),
+         "key_cards_or_themes": d.get("key_cards", []), "chosen": (i + 1 == chosen)}
+        for i, d in enumerate(drafts)
+    ]
+
     cards, validation = _validate_and_repair(
         run_id, concept, raw_cards, cache,
-        stage_prefix=f"build/attempt{attempt}", max_attempts=config.MAX_VALIDATE_REPAIR_ATTEMPTS,
+        stage_prefix=f"draft/attempt{attempt}", max_attempts=config.MAX_VALIDATE_REPAIR_ATTEMPTS,
     )
     if not validation.is_valid:
         raise claude_cli.ClaudeCLIError(
-            "Deck failed validation after the build-repair loop and could not be recovered:\n"
+            "Deck failed validation after the draft-repair loop and could not be recovered:\n"
             f"{validation.as_repair_notes()}"
         )
 
+    # T6 scaffolding: the old chain was synthesize -> build -> optimize; its
+    # equivalent now is judge -> optimize (the judge has already seen every
+    # draft and wrote the brief optimize fact-checks against).
     optimized, optimize_session_id = _optimize(
         run_id, concept, build_brief, cards, key_cards_oracle_text, attempt,
-        resume_session_id=build_session_id,
+        resume_session_id=judge_session_id,
     )
 
     # T3: apply optimize's swap deltas in code rather than trusting a regurgitated
     # full list. Skipped entirely if the fact-check already failed — no point
     # applying swaps to a decklist built on a premise we're about to discard.
-    swap_warnings: list[str] = []
+    swap_warnings: list[str] = list(judge_swap_warnings)
     if optimized.get("strategy_valid", True):
-        optimized_cards, swap_warnings = _apply_swaps(cards, optimized.get("swaps", []))
+        optimized_cards, more_warnings = _apply_swaps(cards, optimized.get("swaps", []))
+        swap_warnings.extend(more_warnings)
     else:
         optimized_cards = cards
 
@@ -555,11 +607,11 @@ def _run_one_attempt(
 
 
 def run_pipeline(run_id: str, concept: ConceptChoice, cache: dict | None = None) -> DeckResult:
-    """Runs stages 2-5: ideate -> synthesize -> build -> validate/repair -> optimize
+    """Runs stages 2-5: draft (×N parallel) -> judge -> validate/repair -> optimize
     -> re-validate -> synergy gate/repair -> card tagging.
 
     If optimize's fact-check pass finds the deck was built on a hallucinated
-    ability (strategy_valid=false), retries the whole ideate->optimize loop
+    ability (strategy_valid=false), retries the whole draft->optimize loop
     once (config.MAX_STRATEGY_RETRIES) with a note about what went wrong,
     rather than patching individual cards — a false premise invalidates the
     whole build brief, not just a few cards. Raises claude_cli.ClaudeCLIError
@@ -597,7 +649,7 @@ def run_pipeline(run_id: str, concept: ConceptChoice, cache: dict | None = None)
             f"turned out NOT to match the card's real printed text: \"{strategy_problem}\" — do not "
             f"repeat that mistake; base this angle strictly on the oracle text given above.\n"
         )
-        _log(f"retrying ideate->optimize (attempt {attempt + 1}/{config.MAX_STRATEGY_RETRIES + 1})...")
+        _log(f"retrying draft->optimize (attempt {attempt + 1}/{config.MAX_STRATEGY_RETRIES + 1})...")
 
     # T4: role/phase tags built off Opus entirely — cheap heuristics + one Haiku
     # call for the ambiguous remainder (card_tagger.py), not part of optimize's

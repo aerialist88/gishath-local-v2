@@ -16,9 +16,9 @@ pricing rather than duplicating any scraping code.
 | `spend_log.py` | — | Per-run cost/turn logging (PRD §4f). |
 | `prompt_helpers.py` + `prompts/*.md` | — | Editable prompt templates (PRD: "prompts/bracket rules as editable config, not hardcoded"). `prompts/synergy_repair.md` (v4) is new. |
 | `concept_selector.py` | 1. select | Picks tonight's commander/archetype; enforces dedupe + commander-eligibility in code. v4: also extracts the commander's 3-5 mechanic tokens (one Haiku call, `synergy_check.py`) for the S3 gate. |
-| `agent_pipeline.py` | 2-5. ideate/build/validate/optimize/synergy-gate | Parallel ideation subagents → synthesize (now also proposes role-quota ranges) → build (now grounded in an EDHREC candidate pool) → validate/repair loop → optimize (now returns swap deltas, applied in code) → re-validate → synergy-density gate/repair. |
+| `agent_pipeline.py` | 2-5. draft/judge/validate/optimize/synergy-gate | 3 parallel draft subagents (each commits to an angle AND builds a complete deck, grounded in an EDHREC candidate pool — the 2026-07-06 widen-back-out) → judge (picks the winning draft, cherry-picks from the losers via code-applied swaps) → validate/repair loop → optimize (returns swap deltas, applied in code) → re-validate → synergy-density gate/repair. |
 | `card_tagger.py` (v4) | tag | T4: role/phase tags for the Breakdown sheet via code heuristics + one Haiku call — off Opus entirely (was part of optimize's schema in v3). |
-| `edhrec_pool.py` (v4) | build | S1: fetches/caches an EDHREC per-commander synergy candidate pool (unofficial endpoint, cached ≥7 days, degrades to v3 no-pool behaviour on any failure). |
+| `edhrec_pool.py` (v4) | draft | S1: fetches/caches an EDHREC per-commander synergy candidate pool (unofficial endpoint, cached ≥7 days, degrades to v3 no-pool behaviour on any failure); fetched once per attempt, shared by all 3 parallel drafts. |
 | `synergy_check.py` (v4) | select, synergy-gate | S3: extracts mechanic tokens at select-time; code-level keyword match against the final decklist decides whether the synergy-repair pass fires. |
 | `pricing.py` | 6. price | HTTP client of gishath-local-v2's own `/search` endpoint (**not** `engine_client.search_many()` directly — see the correction note in the module docstring: that path only reaches 6 of 15 stores). v4: `cheapest_by_card()`/`deck_price_summary()` shared by export.py and emailer.py. |
 | `export.py` | 7. export | Builds the `.xlsx` — Moxfield sheet (basics grouped), Breakdown sheet (qty/price/store/role/phase/CMC/type/rarity, sorted by role then price), Gameplan sheet (now with priced total), Stats sheet (v4: mana curve, colour pips, role counts). `write_moxfield_txt()`/`save_moxfield_txt()` (v4) write a plain-text Moxfield import alongside the xlsx. |
@@ -41,7 +41,9 @@ last-7, Moxfield `.txt`, xlsx Stats sheet). Verified via
 sandbox:**
 - Step 4 (verify token diet ≥5 real runs vs. the 8-run baseline)
 - Step 8 (run synergy grounding ≥7 nights, review deck quality)
-- Step 11 (T1 ideation-collapse trial — gated on step 8 completing)
+- Step 11 (T1 ideation-collapse trial — superseded 2026-07-06 by the
+  widen-back-out: ideation now happens inside the 3 parallel whole-deck
+  draft calls, so there is no standalone ideate stage left to collapse)
 - Friends' email addresses for `DECK_ENGINE_NEWSLETTER_BCC` (plumbing is
   live; newsletter send is a no-op until this is set)
 - EDHREC's real response shape has never been fetched live (unofficial
@@ -68,7 +70,7 @@ been run against the real outside world yet. What *was* verified:
   color-identity subset check, singleton exemptions for basic lands and
   "any number of cards named X" effects, hallucination detection), the
   concept selector's dedupe/retry loop, the full agent pipeline
-  (ideate → synthesize → build → validate/repair → optimize → re-validate)
+  (draft ×3 → judge → validate/repair → optimize → re-validate)
   with a deliberately-broken build response to confirm the repair loop
   actually fires and recovers, the pricing integration against the *real*
   `optimizer.py` (confirmed hidden/rank>5 rows are excluded and the cheapest

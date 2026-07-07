@@ -40,7 +40,7 @@ class ConceptChoice:
     rationale: str
     color_identity: list[str]
     # Real printed ability text from the Scryfall cache — threaded through
-    # every downstream prompt (ideate/build/optimize) so those stages reason
+    # every downstream prompt (draft/judge/optimize) so those stages reason
     # from ground truth instead of the model's memory of what the card does.
     # Added 2026-07-01 after a real run built a deck around a hallucinated
     # commander ability (see agent_pipeline.py docstring).
@@ -179,8 +179,8 @@ def select_concept(
 
         oracle_text = card.get("oracle_text") or ""
         # PRD v4 amendment S3, resolved open question #3: mechanic tokens extracted
-        # HERE, at select-time, once per run — not re-derived per ideation angle or
-        # per build attempt. One cheap Haiku call; [] (gate no-op) on any failure.
+        # HERE, at select-time, once per run — not re-derived per parallel draft or
+        # per repair attempt. One cheap Haiku call; [] (gate no-op) on any failure.
         mechanic_tokens = synergy_check.extract_mechanic_tokens(run_id, card.get("name", commander), oracle_text)
 
         return ConceptChoice(

@@ -53,23 +53,99 @@ async function fillArt(root) {
   }
 }
 
+/* Floating card-image preview on hover — any element with class "card-name"
+   and a data-card="<exact name>" attribute gets one. Uses the same artCache/
+   /api/art lookup as the thumbnail placeholders (fillArt), just rendered at
+   full "normal" size in a box that follows the cursor. One shared element,
+   appended to <body> (not inside VIEW) so it survives route changes without
+   needing to be recreated. */
+let cardPreviewEl = null;
+
+function ensureCardPreview() {
+  if (!cardPreviewEl) {
+    cardPreviewEl = document.createElement("div");
+    cardPreviewEl.className = "card-preview";
+    cardPreviewEl.innerHTML = "<img alt=''>";
+    document.body.appendChild(cardPreviewEl);
+  }
+  return cardPreviewEl;
+}
+
+function positionCardPreview(el, x, y) {
+  const margin = 16;
+  const w = 240, h = Math.round(240 * (680 / 488)); // Scryfall card aspect ratio
+  let left = x + margin;
+  let top = y - h / 2;
+  if (left + w > window.innerWidth - margin) left = x - w - margin;
+  left = Math.max(margin, left);
+  top = Math.min(Math.max(margin, top), window.innerHeight - h - margin);
+  el.style.left = left + "px";
+  el.style.top = top + "px";
+}
+
+async function showCardPreview(name, x, y) {
+  const el = ensureCardPreview();
+  el.dataset.card = name;
+  positionCardPreview(el, x, y);
+  if (!(name in artCache)) {
+    try {
+      const res = await fetch("/api/art?name=" + encodeURIComponent(name));
+      artCache[name] = res.ok ? await res.json() : null;
+    } catch { artCache[name] = null; }
+  }
+  if (el.dataset.card !== name) return; // the cursor moved to a different card while this was in flight
+  const entry = artCache[name];
+  const url = entry && (entry.normal || entry.art_crop);
+  if (!url) { el.style.display = "none"; return; }
+  el.querySelector("img").src = url;
+  el.style.display = "block";
+}
+
+function hideCardPreview() {
+  if (cardPreviewEl) { cardPreviewEl.style.display = "none"; cardPreviewEl.dataset.card = ""; }
+}
+
+function wireCardPreviews(container) {
+  if (container.dataset.previewWired) return; // container persists across tab switches — wire once
+  container.dataset.previewWired = "1";
+  let currentCard = null;
+
+  container.addEventListener("mouseover", (e) => {
+    const el = e.target.closest(".card-name");
+    if (!el || !el.dataset.card || el.dataset.card === currentCard) return;
+    currentCard = el.dataset.card;
+    showCardPreview(currentCard, e.clientX, e.clientY);
+  });
+  container.addEventListener("mousemove", (e) => {
+    if (!currentCard || !e.target.closest(".card-name")) return;
+    positionCardPreview(ensureCardPreview(), e.clientX, e.clientY);
+  });
+  container.addEventListener("mouseout", (e) => {
+    const el = e.target.closest(".card-name");
+    if (!el || el.contains(e.relatedTarget)) return;
+    currentCard = null;
+    hideCardPreview();
+  });
+}
+
 /* ── stage gauge ─────────────────────────────────────────────────────────── */
 
-const GAUGE_STAGES = ["Select", "Ideate", "Synthesize", "Build", "Validate", "Optimize", "Price", "Deliver"];
+const GAUGE_STAGES = ["Select", "Draft", "Judge", "Validate", "Optimize", "Price", "Deliver"];
 
-/* Map a claude-call label (e.g. "ideate/attempt1/2") or a coarse run stage to
-   a gauge index. */
+/* Map a claude-call label (e.g. "draft/attempt1/2") or a coarse run stage to
+   a gauge index. Old ideate/synthesize/build labels (pre widen-back-out runs
+   still replayable from the event log) map onto the nearest new column. */
 function stageIndexOf(label) {
   const l = (label || "").toLowerCase();
   if (l.startsWith("select") || l.startsWith("mechanic")) return 0;
-  if (l.startsWith("ideate")) return 1;
-  if (l.startsWith("synthesize")) return 2;
-  if (l.startsWith("build") || l.startsWith("edhrec")) return 3;
-  if (l.includes("repair") && !l.includes("synergy") && !l.includes("budget")) return 4;
-  if (l.startsWith("validate")) return 4;
-  if (l.startsWith("optimize") || l.includes("synergy")) return 5;
-  if (l.startsWith("price") || l.startsWith("budget") || l.startsWith("card_tag")) return 6;
-  if (l.startsWith("export") || l.startsWith("deliver")) return 7;
+  // repair checked before draft/build: "draft/attempt1/repair-2" is Validate work.
+  if (l.includes("repair") && !l.includes("synergy") && !l.includes("budget")) return 3;
+  if (l.startsWith("draft") || l.startsWith("ideate") || l.startsWith("build") || l.startsWith("edhrec")) return 1;
+  if (l.startsWith("judge") || l.startsWith("synthesize")) return 2;
+  if (l.startsWith("validate")) return 3;
+  if (l.startsWith("optimize") || l.includes("synergy")) return 4;
+  if (l.startsWith("price") || l.startsWith("budget") || l.startsWith("card_tag")) return 5;
+  if (l.startsWith("export") || l.startsWith("deliver")) return 6;
   if (l.startsWith("scryfall") || l.startsWith("startup")) return 0;
   return null;
 }
@@ -77,13 +153,16 @@ function stageIndexOf(label) {
 /* Bench personas — the in-world names for each pipeline stage's workbench. */
 function benchPersona(label) {
   const l = (label || "").toLowerCase();
-  const ideate = l.match(/^ideate\/attempt\d+\/(\d)/);
-  if (ideate) {
-    const n = Number(ideate[1]);
-    const names = [null, ["C", "Apprentice Cog"], ["V", "Apprentice Verse"], ["F", "Apprentice Flux"]];
-    const angles = [null, "angle · first line", "angle · second line", "angle · third line"];
-    const p = names[n] || ["A", "Apprentice"];
-    return { initial: p[0], name: p[1], angle: angles[n] || "ideation bench" };
+  // draft = the widened-back-out parallel deckwrights; ideate = pre-2026-07-06
+  // runs still replayable from their event logs.
+  const draft = l.match(/^(?:draft|ideate)\/attempt\d+\/(\d)/);
+  if (draft) {
+    const n = Number(draft[1]);
+    const names = [null, ["C", "Deckwright Cog"], ["V", "Deckwright Verse"], ["F", "Deckwright Flux"]];
+    const angles = [null, "drafting the hundred · first line", "drafting the hundred · second line",
+      "drafting the hundred · third line"];
+    const p = names[n] || ["D", "Deckwright"];
+    return { initial: p[0], name: p[1], angle: angles[n] || "drafting bench" };
   }
   // Checked BEFORE the generic "select" branch below — "select/mechanic-tokens"
   // also starts with "select", so the order here matters (previously this
@@ -95,6 +174,8 @@ function benchPersona(label) {
       quiet: "(a quick keyword pass — little to narrate here)",
     };
   if (l.startsWith("select")) return { initial: "G", name: "The Guildmaster", angle: "choosing tonight's commander" };
+  if (l.startsWith("judge")) return { initial: "J", name: "The Adjudicator", angle: "judging the three drafts" };
+  // Pre-widen-back-out labels, kept so old runs replay with sensible benches:
   if (l.startsWith("synthesize")) return { initial: "S", name: "The Scrivener", angle: "merging the three angles" };
   if (l.startsWith("build")) return { initial: "B", name: "The Builder", angle: "drafting the hundred" };
   if (l.includes("synergy-repair")) return { initial: "M", name: "The Master Deckwright", angle: "synergy mending" };
@@ -115,6 +196,21 @@ function labelSuffix(l, prefix) {
   return m ? `${prefix} ${m[1]}` : prefix;
 }
 
+/* Which pixel figure works a bench — the four characters from the "Deck
+   Artificer Explorations" prototype (static/px/), mapped onto the personas.
+   Only four sprites exist, so several personas share a figure: the brown-robed
+   master covers every elder role (select / judge / validate / repair). */
+function benchSpriteChar(label) {
+  const l = (label || "").toLowerCase();
+  const draft = l.match(/^(?:draft|ideate)\/attempt\d+\/(\d)/);
+  if (draft) return ["cog", "verse", "flux"][(Number(draft[1]) - 1) % 3];
+  if (l.startsWith("select/mechanic") || l.includes("mechanic-token")) return "verse";
+  if (l.startsWith("card_tag") || l.startsWith("build")) return "cog";
+  if (l.startsWith("optimize")) return "flux";
+  if (l.startsWith("budget")) return "verse";
+  return "master";
+}
+
 /* ── router ─────────────────────────────────────────────────────────────── */
 
 let liveES = null;      // active EventSource
@@ -128,6 +224,7 @@ function stopLive() {
 
 async function route() {
   stopLive();
+  hideCardPreview();
   HEADER.classList.remove("halted");
   const hash = location.hash || "#home";
   const [name, arg] = hash.slice(1).split("/");
@@ -169,8 +266,11 @@ async function viewHome() {
           <div class="hero-blurb" style="margin-top:6px">Name a commander, or let the guild choose one — commanders forged within the last ${k.dedupe_days} days are excluded from the draw.</div>
         </div>
         <div class="commission-row">
-          <div class="commander-input"><span>&#8981;</span>
-            <input id="commander-input" type="text" placeholder="Name a commander&hellip; e.g. &ldquo;Braids, Arisen Nightmare&rdquo;" autocomplete="off">
+          <div class="commander-field">
+            <div class="commander-input"><span>&#8981;</span>
+              <input id="commander-input" type="text" placeholder="Name a commander&hellip; e.g. &ldquo;Braids, Arisen Nightmare&rdquo;" autocomplete="off">
+            </div>
+            <div class="suggest-box" id="commander-suggest" style="display:none"></div>
           </div>
           <button class="btn-guild" id="btn-guild">Let the guild choose <span class="die"></span></button>
         </div>
@@ -222,9 +322,7 @@ async function viewHome() {
   };
   $("#btn-guild").onclick = () => begin(null);
   $("#btn-begin").onclick = () => begin($("#commander-input").value.trim());
-  $("#commander-input").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") begin(e.target.value.trim());
-  });
+  wireCommanderAutocomplete($("#commander-input"), $("#commander-suggest"), begin);
   $("#btn-demo").onclick = async () => {
     try {
       await api("/api/commission", {
@@ -235,6 +333,77 @@ async function viewHome() {
     } catch (err) { toast(err.message); }
   };
   fillArt(VIEW);
+}
+
+/* Commander name autocomplete — searches /api/commanders (a local Scryfall
+   index of commander-eligible cards, same eligibility check select-time
+   validation uses) as the user types. Debounced, keyboard-navigable,
+   click-outside-to-close; Enter submits the commission either way (the
+   active suggestion if the dropdown is open, otherwise whatever was typed). */
+function wireCommanderAutocomplete(input, box, onSubmit) {
+  let items = [];
+  let activeIdx = -1;
+  let debounceTimer = null;
+  let requestSeq = 0;
+
+  const colorLabel = (colors) => (colors && colors.length ? colors.join("") : "C");
+
+  const close = () => {
+    box.style.display = "none";
+    box.innerHTML = "";
+    items = [];
+    activeIdx = -1;
+  };
+
+  const render = () => {
+    if (!items.length) { close(); return; }
+    box.innerHTML = items.map((it, i) => `<div class="suggest-item${i === activeIdx ? " active" : ""}" data-idx="${i}">
+      <span>${esc(it.name)}</span><span class="colors">${esc(colorLabel(it.colors))}</span>
+    </div>`).join("");
+    box.style.display = "block";
+    box.querySelectorAll(".suggest-item").forEach((el) => {
+      el.onmousedown = (e) => { // mousedown, not click — fires before the input's blur closes the box
+        e.preventDefault();
+        input.value = items[Number(el.dataset.idx)].name;
+        close();
+      };
+    });
+  };
+
+  input.addEventListener("input", () => {
+    const q = input.value.trim();
+    clearTimeout(debounceTimer);
+    if (q.length < 2) { close(); return; }
+    debounceTimer = setTimeout(async () => {
+      const seq = ++requestSeq;
+      try {
+        const results = await api("/api/commanders?q=" + encodeURIComponent(q));
+        if (seq !== requestSeq) return; // a newer keystroke's response already landed
+        items = results;
+        activeIdx = -1;
+        render();
+      } catch { /* suggestions are a nicety — a failed lookup just shows none */ }
+    }, 150);
+  });
+
+  input.addEventListener("keydown", (e) => {
+    if (box.style.display === "block" && items.length) {
+      if (e.key === "ArrowDown") { e.preventDefault(); activeIdx = Math.min(activeIdx + 1, items.length - 1); render(); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); activeIdx = Math.max(activeIdx - 1, 0); render(); return; }
+      if (e.key === "Escape") { close(); return; }
+      if (e.key === "Enter" && activeIdx >= 0) { e.preventDefault(); input.value = items[activeIdx].name; close(); return; }
+    }
+    if (e.key === "Enter") { close(); onSubmit(input.value.trim()); }
+  });
+
+  // Self-unregistering: viewHome() re-renders VIEW.innerHTML on every visit,
+  // which detaches this exact `input` node without ever calling back here to
+  // clean up — checking document.body.contains() lets a stale listener from
+  // a previous render remove itself instead of accumulating forever.
+  document.addEventListener("click", function onOutsideClick(e) {
+    if (!document.body.contains(input)) { document.removeEventListener("click", onOutsideClick); return; }
+    if (e.target !== input) close();
+  });
 }
 
 /* ── live run (workshop) ────────────────────────────────────────────────── */
@@ -310,7 +479,8 @@ function renderLive(snap, postMortem) {
     <div class="gauge" id="gauge">${gaugeHTML(gaugeIdx, snap)}</div>
     <div class="caps-lg live-section-title" id="benches-title">${benchesTitle(snap, active)}</div>
     <div class="live-cols">
-      <div class="benches" id="benches">${active.length ? active.map((c) => benchHTML(c)).join("") : (snap.status === "running" ? emptyBenchesHTML() : "")}</div>
+      <div class="benches" id="benches">${active.length ? active.map((c) => benchHTML(c)).join("") :
+        (snap.status === "running" ? emptyBenchesHTML() : snap.status === "delivered" ? finaleHTML(snap) : "")}</div>
       <aside style="display:flex;flex-direction:column;gap:14px">
         <div class="ledger" id="ledger">
           <div class="caps" style="margin-bottom:8px">Ledger — the night so far</div>
@@ -338,9 +508,19 @@ function renderLive(snap, postMortem) {
   const t0 = (snap.started_ts || (Date.now() / 1000)) * 1000;
   const tick = () => {
     const el = $("#stat-elapsed");
-    if (!el) return;
-    const s = Math.max(0, Math.floor((Date.now() - t0) / 1000));
-    el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    if (el) {
+      const s = Math.max(0, Math.floor((Date.now() - t0) / 1000));
+      el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    }
+    // Live requery each tick (not cached) — picks up benches appended after
+    // this interval was set up, and naturally stops touching a placeholder
+    // the moment call_text clears its "placeholder" class/attribute.
+    document.querySelectorAll(".stream-text.placeholder[data-waiting-since]").forEach((span) => {
+      const since = Number(span.dataset.waitingSince);
+      if (!since) return;
+      const secs = Math.max(0, Math.floor((Date.now() - since) / 1000));
+      span.textContent = `(waiting for the first line… ${secs}s)`;
+    });
   };
   tick();
   if (snap.status === "running") liveTicker = setInterval(tick, 1000);
@@ -399,8 +579,11 @@ function benchesTitle(snap, active) {
   if (snap.status === "delivered") return "The work is done — the commission is delivered";
   if (!active.length) return "Between benches — the guild confers";
   const l = active[0].label.toLowerCase();
+  if (l.startsWith("draft") && !l.includes("repair"))
+    return "The deckwrights convene — three benches, three whole decks, drafted in parallel";
   if (l.startsWith("ideate")) return "The apprentices convene — three ideation benches, working in parallel";
   if (l.includes("repair")) return "The master inspects the work — flaws found, repair underway";
+  if (l.startsWith("judge")) return "The adjudicator weighs the three drafts";
   if (l.startsWith("build")) return "The builder drafts the hundred";
   if (l.startsWith("optimize")) return "The optimizer fact-checks and fine-tunes";
   if (l.startsWith("select")) return "The guildmaster chooses tonight's commander";
@@ -412,7 +595,28 @@ function benchesTitle(snap, active) {
    exploration, reused generically for any inter-stage gap rather than
    one specific moment. */
 function emptyBenchesHTML() {
-  return `<div class="benches-waiting"><span></span><span></span><span></span></div>`;
+  return `<div class="benches-waiting">
+    <div class="px-sprite px-cog"></div>
+    <div class="px-sprite px-verse"></div>
+    <div class="px-sprite px-flux"></div>
+  </div>`;
+}
+
+/* The concluding tableau — once delivered, the whole guild gathers in the
+   space where the benches stood to admire the finished deck. The mirrored
+   right-hand pair turns everyone in toward the card. */
+function finaleHTML(snap) {
+  const commander = snap.concept ? snap.concept.commander : "";
+  return `<div class="guild-finale">
+    <div class="finale-scene">
+      <span class="finale-fig"><span class="px-sprite px-cog"></span></span>
+      <span class="finale-fig"><span class="px-sprite px-master"></span></span>
+      <div class="finale-card"><div class="art-ph flip-in" data-art="${esc(commander)}" data-art-kind="normal"><span>commander<br>art</span></div></div>
+      <span class="finale-fig"><span class="px-sprite px-verse"></span></span>
+      <span class="finale-fig"><span class="px-sprite px-flux"></span></span>
+    </div>
+    <div class="finale-caption">The guild gathers to admire the night&rsquo;s work.</div>
+  </div>`;
 }
 
 function swapRowHTML(sw, animate) {
@@ -427,7 +631,20 @@ function swapRowHTML(sw, animate) {
 function benchHTML(call, entering) {
   const p = benchPersona(call.label);
   const hasText = !!(call.text_tail && call.text_tail.length);
-  const streamText = hasText ? esc(call.text_tail) : (p.quiet || "(waiting for the first line…)");
+  const hasThink = !!(call.thinking_tail && call.thinking_tail.length);
+  // Quiet stages (mechanic-tokens, card tagging) are EXPECTED to stay near-empty —
+  // showing a growing timer there would read as "why is a quick pass taking so
+  // long?". Only the generic placeholder gets a live counter, so a genuinely
+  // slow first token (large prompt context, e.g. build/optimize) reads as "still
+  // working" rather than "might be stuck". A visible thinking stream also
+  // silences the timer — the reasoning itself is the proof of life.
+  const showTimer = !hasText && !hasThink && !p.quiet;
+  const streamText = hasText ? esc(call.text_tail)
+    : (p.quiet || (hasThink ? "(the reply follows the reasoning…)" : "(waiting for the first line…)"));
+  const waitingAttr = showTimer && call.started_at ? ` data-waiting-since="${Math.round(call.started_at * 1000)}"` : "";
+  const thinkHTML = hasThink
+    ? `<div class="stream-think"><span class="caps think-caps">The reasoning</span><span class="tt">${esc(call.thinking_tail.slice(-1200))}</span></div>`
+    : "";
   return `<div class="bench ${call.is_error ? "errored" : ""}${entering ? " bench-entering" : ""}" data-label="${esc(call.label)}">
     <div class="bench-head">
       <div class="bench-badge">${esc(p.initial)}</div>
@@ -435,8 +652,9 @@ function benchHTML(call, entering) {
       <div class="head-spacer"></div>
       <span class="model-chip">${esc(call.model)}</span>
     </div>
-    <div class="bench-stream"><div><span class="stream-text${hasText ? "" : " placeholder"}">${streamText}</span>${call.done ? "" : '<span class="caret"></span>'}</div></div>
+    <div class="bench-stream">${thinkHTML}<div><span class="stream-text${hasText ? "" : " placeholder"}"${waitingAttr}>${streamText}</span>${call.done ? "" : '<span class="caret"></span>'}</div></div>
     <div class="bench-foot">
+      <div class="px-sprite working px-${benchSpriteChar(call.label)}"></div>
       <span class="pulse status">⚙ ${esc(call.status)}</span><span class="head-spacer"></span>
       <span class="meta">${call.done ? `${call.duration_s.toFixed(0)}s · $${call.cost_usd.toFixed(4)} · ${call.num_turns} turns` : ""}</span>
     </div>
@@ -525,13 +743,20 @@ function applyEventToMirror(s, e) {
       s.budget_swaps = (s.budget_swaps || []).concat(e.swaps || []);
       break;
     case "call_started":
-      s.calls[e.label] = { label: e.label, model: e.model, text_tail: "", status: "thinking...",
-                           done: false, is_error: false, cost_usd: 0, num_turns: 0, duration_s: 0 };
+      s.calls[e.label] = { label: e.label, model: e.model, text_tail: "", thinking_tail: "",
+                           status: "thinking...",
+                           done: false, is_error: false, cost_usd: 0, num_turns: 0, duration_s: 0,
+                           started_at: e.t };
       s.call_order.push(e.label);
       break;
     case "call_text": {
       const call = s.calls[e.label];
       if (call) call.text_tail = (call.text_tail + e.chunk).slice(-4000);
+      break;
+    }
+    case "call_thinking": {
+      const call = s.calls[e.label];
+      if (call) call.thinking_tail = (call.thinking_tail + e.chunk).slice(-4000);
       break;
     }
     case "call_status": {
@@ -672,6 +897,27 @@ function applyLiveEvent(e) {
         }
         bench.textContent = (bench.textContent + e.chunk).slice(-1200);
       } else rerenderSoon();
+      return;
+    }
+    case "call_thinking": {
+      const benchEl = document.querySelector(`.bench[data-label="${CSS.escape(e.label)}"]`);
+      if (!benchEl) { rerenderSoon(); return; }
+      const streamBox = benchEl.querySelector(".bench-stream");
+      let think = streamBox.querySelector(".stream-think .tt");
+      if (!think) {
+        streamBox.insertAdjacentHTML("afterbegin",
+          `<div class="stream-think"><span class="caps think-caps">The reasoning</span><span class="tt"></span></div>`);
+        think = streamBox.querySelector(".stream-think .tt");
+        // The reasoning stream is proof of life — retire the waiting timer and
+        // quiet the placeholder (the class stays so the first call_text chunk
+        // still clears it the normal way).
+        const ph = streamBox.querySelector(".stream-text.placeholder");
+        if (ph) {
+          delete ph.dataset.waitingSince;
+          ph.textContent = "(the reply follows the reasoning…)";
+        }
+      }
+      think.textContent = (think.textContent + e.chunk).slice(-1200);
       return;
     }
     case "call_status": {
@@ -859,6 +1105,7 @@ async function viewDeck(id) {
     fillArt(body);
   };
   document.querySelectorAll("#deck-tabs .tab").forEach((t) => (t.onclick = () => show(t.dataset.tab)));
+  wireCardPreviews(body); // delegated — covers every tab's card names, wired once
   show("decklist");
   fillArt(VIEW);
 }
@@ -890,7 +1137,7 @@ function decklistTab(deck) {
       ${[...groups.entries()].map(([role, cards]) => `
         <div class="rolegroup">
           <div class="rolegroup-head"><span class="serif">${esc(role)}</span><span class="count">${cards.length} card${cards.length > 1 ? "s" : ""}</span></div>
-          ${cards.map((c) => `<div class="cardrow"><span>${esc(c.name)}</span><span class="dotlead"></span>
+          ${cards.map((c) => `<div class="cardrow"><span class="card-name" data-card="${esc(c.name)}">${esc(c.name)}</span><span class="dotlead"></span>
             <span class="price ${c.over_cap ? "flag" : ""}">${c.price_sgd != null ? c.price_sgd.toFixed(2) + (c.over_cap ? " ⚑" : "") : "—"}</span></div>`).join("")}
         </div>`).join("")}
     </div>
@@ -907,7 +1154,7 @@ function decklistTab(deck) {
       </div>
       ${top.length ? `<div class="rail-panel">
         <div class="caps" style="margin-bottom:12px">Priciest inclusions</div>
-        ${top.map(([n, pr]) => `<div class="cardrow" style="font-size:12.5px"><span>${esc(n)}</span><span class="dotlead"></span>
+        ${top.map(([n, pr]) => `<div class="cardrow" style="font-size:12.5px"><span class="card-name" data-card="${esc(n)}">${esc(n)}</span><span class="dotlead"></span>
           <span class="price ${pr > (deck.price.per_card_cap_sgd || Infinity) ? "flag" : ""}">${pr.toFixed(2)}</span></div>`).join("")}
       </div>` : ""}
       <div class="note-plaque">
@@ -924,7 +1171,7 @@ function breakdownTab(deck) {
     <table class="breakdown-table">
       <thead><tr><th>Card</th><th>SG Price</th><th>Store</th><th>Role</th><th>Phase</th><th>CMC</th><th>Type</th><th>Rarity</th></tr></thead>
       <tbody>${(deck.cards || []).map((c) => `<tr>
-        <td${c.is_commander ? ' style="font-weight:700"' : ""}>${esc(c.name)}</td>
+        <td class="card-name" data-card="${esc(c.name)}"${c.is_commander ? ' style="font-weight:700"' : ""}>${esc(c.name)}</td>
         <td class="mono ${c.over_cap ? "flag" : ""}" style="${c.over_cap ? "color:var(--rust)" : "color:#065f46"}">${c.price_sgd != null ? "SGD " + c.price_sgd.toFixed(2) + (c.over_cap ? " ⚑" : "") : "unavailable"}</td>
         <td class="mono">${esc(c.store || "—")}</td>
         <td>${esc(c.role)}</td><td>${esc(c.phase)}</td>
@@ -997,8 +1244,8 @@ async function viewRules() {
   const brackets = [["1", "Exhibition"], ["2", "Core"], ["3", "Upgraded"], ["4", "Optimized"], ["5", "cEDH"]];
   const stages = [
     ["select", "Select", "concept + dedupe"],
-    ["ideate", "Ideate ×3", "three benches in parallel"],
-    ["build", "Build", "the 100-card list"],
+    ["draft", "Draft ×3", "three whole decks in parallel"],
+    ["judge", "Judge", "picks the winning draft"],
     ["validate_repair", "Validate + repair", "code-level checks, LLM mends"],
     ["optimize", "Optimize", "swap-delta passes"],
     ["card_tagger", "Card tagger", "roles + phases for the sheets"],

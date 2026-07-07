@@ -105,7 +105,7 @@ def main(view=None, forced_commander: str | None = None, run_id: str | None = No
                 _notify("concept_chosen", commander=concept.commander, archetype=concept.archetype,
                         rationale=concept.rationale, colors=concept.color_identity)
 
-                stage = "ideate/build/validate/optimize"
+                stage = "draft/judge/validate/optimize"
                 _notify("set_stage", stage=stage)
                 deck = agent_pipeline.run_pipeline(run_id, concept, cache=cache)
                 _announce(f"[run {run_id[:8]}] deck validated: {deck.validation.is_valid} "

@@ -73,6 +73,7 @@ avoid the exact pipe-deadlock bug already hit once in this project's history
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import threading
 import time
@@ -155,9 +156,36 @@ def _feed_view(handle, event: dict) -> None:
             delta = inner.get("delta", {})
             if delta.get("type") == "text_delta":
                 handle.append_text(delta.get("text", ""))
+            elif delta.get("type") == "thinking_delta":
+                # Extended-thinking stream (enabled via MAX_THINKING_TOKENS in
+                # run() when config.THINKING_BUDGET_TOKENS > 0). What arrives
+                # depends on the model — confirmed with a real sonnet capture on
+                # Trevor's Mac, 2026-07-07:
+                #   - haiku streams the actual reasoning text in delta["thinking"]
+                #   - sonnet/opus stream REDACTED deltas: delta["thinking"] is
+                #     always "" and only delta["estimated_tokens"] (a running
+                #     counter) is populated — the raw reasoning of Claude 4/5-era
+                #     models is never sent over the wire, so a text stream for
+                #     those tiers is structurally impossible, not a plumbing bug.
+                # For the redacted case, surface the counter as a ticking status
+                # line so a long think (build calls have sat >12 min in real
+                # runs) reads as visible progress instead of a hang.
+                chunk = delta.get("thinking", "")
+                if chunk:
+                    handle.append_thinking(chunk)
+                else:
+                    est = delta.get("estimated_tokens")
+                    if est:
+                        handle.set_status(f"thinking it through... ~{est:,} tokens")
         elif itype == "content_block_start":
             block = inner.get("content_block", {})
-            if block.get("type") == "tool_use":
+            if block.get("type") == "thinking":
+                handle.set_status("thinking it through...")
+            elif block.get("type") == "text":
+                # First visible-reply block (often right after a thinking block
+                # ends) — flip the status so the foot line tracks the shift.
+                handle.set_status("drafting...")
+            elif block.get("type") == "tool_use":
                 name = block.get("name")
                 if name == "StructuredOutput":
                     handle.set_status("packaging structured output...")
@@ -211,8 +239,8 @@ def run(
                          stage so spend_log.summarize_run(run_id) can total
                          actual cost/turns for that run — see PRD §4f).
         stage:          free-text label for the spend log AND the live-view
-                         panel title, e.g. "ideate/attempt1/2".
-        model_tier_key: key into config.MODEL_TIERS (e.g. "build", "optimize")
+                         panel title, e.g. "draft/attempt1/2".
+        model_tier_key: key into config.MODEL_TIERS (e.g. "draft", "optimize")
                          — NOT a raw model name, so retuning a stage's model
                          is a one-line config edit, not a call-site hunt.
         json_schema:    optional JSON Schema dict — passed to `--json-schema`
@@ -274,10 +302,17 @@ def run(
 
     handle = _active_view.start_call(stage, model) if _active_view is not None else None
 
+    # Extended thinking: the CLI reads MAX_THINKING_TOKENS from its environment
+    # (no dedicated flag) — set it per-subprocess so nothing leaks into the
+    # parent process or any other tool this app shells out to. 0 = off.
+    thinking_budget = int(getattr(config, "THINKING_BUDGET_TOKENS", 0) or 0)
+    env = {**os.environ, "MAX_THINKING_TOKENS": str(thinking_budget)} if thinking_budget > 0 else None
+
     try:
         proc = subprocess.Popen(
             cmd,
             cwd=str(cwd) if cwd else None,
+            env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,  # never let claude block waiting on stdin in an unattended run

@@ -4,7 +4,7 @@
 .PHONY: engine-build run sync-engine clean install-playwright atelier atelier-web help
 
 GO          = /usr/local/go/bin/go
-ENGINE_SRC  = ../gishath_local/gishathfetch-master/api
+ENGINE_SRC  = engine-src/api
 ENGINE_BIN  = $(shell pwd)/bin/gishath-engine
 
 help:
@@ -39,8 +39,9 @@ atelier-web:
 
 sync-engine:
 	@echo "Fetching upstream changes..."
-	cd "$(ENGINE_SRC)/.." && git fetch upstream && git merge upstream/master
+	cd "$(ENGINE_SRC)/.." && git fetch origin && git merge origin/master
 	@echo "✓  Synced. Run 'make engine-build' to rebuild."
+	@echo "Note: api/cmd/serve/ (the local HTTP shim) is untracked here — merge won't touch it."
 
 clean:
 	rm -f "$(ENGINE_BIN)"

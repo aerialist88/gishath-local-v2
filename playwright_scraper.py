@@ -22,14 +22,17 @@ Public API:
 Card dict shape (matches engine_client):
     {name, url, img, price, inStock, isFoil, src, quality, extraInfo}
 
-Scraping variants (three patterns used by BinderPOS stores):
+Scraping variants:
     1 — Cards Citadel: custom HTML (div.Norm rows)
     2 — Shopify data-product-variants JSON attribute
     3 — productCard__card divs with chip data attributes
+    4 — Agora Hobby: bespoke store-item markup (not BinderPOS/Shopify — moved
+        here after Cloudflare turned on a Turnstile challenge site-wide)
 """
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -135,6 +138,17 @@ BINDERPOS_STORES: list[StoreConfig] = [
         base_url="https://hideoutcg.com",
         search_path="/search?q={q}",
         variant=3,
+    ),
+    # ── Variant 4 (Agora Hobby's own store-item markup) ────────────────────
+    # Moved here from the Go engine after Cloudflare turned on an interactive
+    # Turnstile challenge site-wide (confirmed blocking plain curl, browser-UA
+    # curl, and curl_cffi Chrome-TLS-impersonation alike — proxies/headers
+    # can't solve a JS challenge, only a real/headless browser can).
+    StoreConfig(
+        name="Agora Hobby",
+        base_url="https://agorahobby.com",
+        search_path="/store/search?category=mtg&searchfield={q}",
+        variant=4,
     ),
 ]
 
@@ -412,6 +426,44 @@ _JS_VARIANT3 = r"""
 }
 """
 
+# Variant 4: Agora Hobby's own store-item markup (not a BinderPOS/Shopify
+# store — a bespoke platform). No per-item product link is exposed in the
+# listing markup, so href is left for the caller to fill in with the
+# current search page's URL.
+_JS_VARIANT4 = r"""
+() => {
+    const cards = [];
+    document.querySelectorAll('div#store_listingcontainer div.store-item').forEach(item => {
+        const stockEl = item.querySelector('div.store-item-stock');
+        if (!stockEl || stockEl.innerText.trim() === 'Stock: 0') return;
+
+        const priceEl = item.querySelector('div.store-item-price');
+        const rawPrice = priceEl ? (priceEl.innerText || '').replace(/\$/g, '').replace(/,/g, '').trim() : '';
+        const price = parseFloat(rawPrice) || 0;
+        if (!price) return;
+
+        const titleEl = item.querySelector('div.store-item-title');
+        const name = titleEl ? titleEl.innerText.trim() : '';
+        if (!name) return;
+
+        const catEl = item.querySelector('div.store-item-cat');
+        const catText = catEl ? catEl.innerText.trim() : '';
+        let quality = '';
+        const parts = catText.split(' - ');
+        if (parts.length === 2) quality = parts[1].trim();
+        let extra = '';
+        const bracketIdx = catText.indexOf(']');
+        if (bracketIdx > 1) extra = catText.slice(0, bracketIdx + 1);
+
+        const imgEl = item.querySelector('div.store-item-img');
+        const img = imgEl ? (imgEl.getAttribute('data-img') || '') : '';
+
+        cards.push({ title: name, href: window.location.href, img, price, quality, extra });
+    });
+    return cards;
+}
+"""
+
 
 # ── curl_cffi HTTP client (primary — bypasses Cloudflare TLS fingerprinting) ──
 
@@ -560,10 +612,56 @@ def _parse_bs_variant3(soup: BeautifulSoup, store: StoreConfig) -> list[dict]:
     return cards
 
 
+def _parse_bs_variant4(soup: BeautifulSoup, store: StoreConfig) -> list[dict]:
+    """Variant 4: Agora Hobby's own store-item markup.
+
+    href is left blank here — no per-item link is exposed in the listing
+    markup, so the caller (_scrape_with_cffi) fills it in with the current
+    search page's URL, mirroring the Go gateway's original behaviour.
+    """
+    cards = []
+    for item in soup.select("div#store_listingcontainer div.store-item"):
+        stock_el = item.select_one("div.store-item-stock")
+        if not stock_el or stock_el.get_text(strip=True) == "Stock: 0":
+            continue
+
+        price_el = item.select_one("div.store-item-price")
+        raw_price = price_el.get_text(strip=True).replace("$", "").replace(",", "") if price_el else ""
+        try:
+            price = float(raw_price)
+        except ValueError:
+            price = 0.0
+        if not price:
+            continue
+
+        title_el = item.select_one("div.store-item-title")
+        name = title_el.get_text(strip=True) if title_el else ""
+        if not name:
+            continue
+
+        cat_el = item.select_one("div.store-item-cat")
+        cat_text = cat_el.get_text(strip=True) if cat_el else ""
+        quality = ""
+        parts = cat_text.split(" - ")
+        if len(parts) == 2:
+            quality = parts[1].strip()
+        extra = ""
+        bracket_idx = cat_text.find("]")
+        if bracket_idx > 1:
+            extra = cat_text[: bracket_idx + 1]
+
+        img_el = item.select_one("div.store-item-img")
+        img = (img_el.get("data-img") or "") if img_el else ""
+
+        cards.append({"title": name, "href": "", "img": img, "price": price, "quality": quality, "extra": extra})
+    return cards
+
+
 _BS_PARSERS = {
     1: _parse_bs_variant1,
     2: _parse_bs_variant2,
     3: _parse_bs_variant3,
+    4: _parse_bs_variant4,
 }
 
 
@@ -588,6 +686,10 @@ async def _scrape_with_cffi(store: StoreConfig, card_name: str) -> list[dict] | 
 
     soup     = BeautifulSoup(html, "lxml")
     raw_list = _BS_PARSERS[store.variant](soup, store)
+    if store.variant == 4:
+        # No per-item link in the listing markup — link to this search page.
+        for raw in raw_list:
+            raw["href"] = url
     log.debug("[%s] curl_cffi parsed %d raw items for '%s'", store.name, len(raw_list), card_name)
 
     cards = []
@@ -669,11 +771,12 @@ async def _scrape_with_playwright(store: StoreConfig, card_name: str) -> list[di
     await _ensure_browser_healthy()
 
     url = store.search_url(card_name)
-    js  = {1: _JS_VARIANT1, 2: _JS_VARIANT2, 3: _JS_VARIANT3}[store.variant]
+    js  = {1: _JS_VARIANT1, 2: _JS_VARIANT2, 3: _JS_VARIANT3, 4: _JS_VARIANT4}[store.variant]
     wait_sel = {
         1: "div.Norm",
         2: "[data-product-variants]",
         3: "div.productCard__card",
+        4: "div#store_listingcontainer div.store-item",
     }[store.variant]
 
     async with _semaphore:
@@ -781,10 +884,21 @@ async def _search_one_store(store: StoreConfig, card_name: str) -> tuple[list[di
         return [], err
 
 
-async def _search_card_all_stores(card_name: str) -> dict:
-    """Search all BinderPOS stores for a single card concurrently."""
-    tasks = [_search_one_store(store, card_name) for store in BINDERPOS_STORES]
-    results = await asyncio.gather(*tasks)
+async def _search_card_all_stores(card_name: str, on_store_result=None) -> dict:
+    """Search all BinderPOS stores for a single card concurrently.
+
+    If on_store_result is given, it is invoked as on_store_result(card_name,
+    cards, err) the moment each store finishes — letting a caller collect
+    completed work incrementally so a wall-clock deadline elsewhere can abandon
+    this coroutine without discarding the stores that already succeeded.
+    """
+    async def _one(store: StoreConfig) -> tuple[list[dict], dict | None]:
+        cards, err = await _search_one_store(store, card_name)
+        if on_store_result is not None:
+            on_store_result(card_name, cards, err)
+        return cards, err
+
+    results = await asyncio.gather(*(_one(store) for store in BINDERPOS_STORES))
 
     all_cards: list[dict] = []
     errors: list[dict] = []
@@ -864,12 +978,12 @@ async def debug_store(store: StoreConfig, card_name: str) -> dict:
             result["error"] += " | Playwright browser not running"
             return result
 
-        js    = {1: _JS_VARIANT1, 2: _JS_VARIANT2, 3: _JS_VARIANT3}[store.variant]
+        js    = {1: _JS_VARIANT1, 2: _JS_VARIANT2, 3: _JS_VARIANT3, 4: _JS_VARIANT4}[store.variant]
         async with _semaphore:
             page = await _new_stealth_page()
             try:
                 await page.goto(url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
-                wait_sel = {1: "div.Norm", 2: "[data-product-variants]", 3: "div.productCard__card"}[store.variant]
+                wait_sel = {1: "div.Norm", 2: "[data-product-variants]", 3: "div.productCard__card", 4: "div#store_listingcontainer div.store-item"}[store.variant]
                 try:
                     await page.wait_for_selector(wait_sel, timeout=WAIT_SELECTOR_TIMEOUT)
                 except Exception:
@@ -913,7 +1027,11 @@ async def debug_all_stores(card_name: str) -> list[dict]:
     return list(await asyncio.gather(*tasks))
 
 
-async def search_many_playwright(card_names: list[str]) -> dict[str, dict]:
+async def search_many_playwright(
+    card_names: list[str],
+    sink: dict[str, dict] | None = None,
+    sink_lock: "threading.Lock | None" = None,
+) -> dict[str, dict]:
     """Search all BinderPOS stores for multiple cards concurrently.
 
     Returns:
@@ -924,8 +1042,28 @@ async def search_many_playwright(card_names: list[str]) -> dict[str, dict]:
 
     Card shape matches engine_client output:
         {name, url, img, price, inStock, isFoil, src, quality, extraInfo}
+
+    If sink is provided, per-store results are published into it incrementally
+    (same {card_name: {"cards": [...], "errors": [...]}} shape) as each store
+    finishes — so a caller that abandons this coroutine on a wall-clock budget
+    (app.py's SEARCH_BUDGET_SECONDS) can still read whatever completed instead of
+    losing the entire BinderPOS path. sink is mutated from this event loop's
+    thread and read from the Flask thread; pass sink_lock to make each side's
+    snapshot consistent.
     """
-    tasks = {name: _search_card_all_stores(name) for name in card_names}
+    def _publish(card_name: str, cards: list[dict], err: dict | None) -> None:
+        if sink is None:
+            return
+        with (sink_lock if sink_lock is not None else contextlib.nullcontext()):
+            slot = sink.setdefault(card_name, {"cards": [], "errors": []})
+            slot["cards"].extend(cards)
+            if err:
+                slot["errors"].append(err)
+
+    tasks = {
+        name: _search_card_all_stores(name, on_store_result=_publish)
+        for name in card_names
+    }
     results = await asyncio.gather(*tasks.values(), return_exceptions=True)
 
     out: dict[str, dict] = {}

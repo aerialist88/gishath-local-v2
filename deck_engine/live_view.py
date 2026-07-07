@@ -15,8 +15,8 @@ live_view continues to behave exactly as before — this module has zero
 effect unless explicitly turned on.
 
 HISTORY COLLAPSE (added 2026-07-01, after a real run on Trevor's Mac): a full
-pipeline run is easily 8-20+ `claude -p` calls once ideate's 3 parallel
-angles, synthesize, build, N validate/repair attempts, and optimize are all
+pipeline run is easily 8-20+ `claude -p` calls once the 3 parallel whole-deck
+drafts, judge, N validate/repair attempts, and optimize are all
 counted — rendering every one as a full 12-line panel forever made the
 terminal view grow taller than the window, which breaks rich.Live's redraw
 (it moves the cursor up over its own last frame; once the frame is taller
@@ -46,6 +46,7 @@ class _CallPane:
     stage: str
     model: str
     text: str = ""
+    thinking: str = ""   # extended-thinking stream — shown (dim italic) until the visible reply starts
     status: str = "thinking..."
     done: bool = False
     cost_usd: float = 0.0
@@ -54,7 +55,15 @@ class _CallPane:
     is_error: bool = False
 
     def render(self) -> Panel:
-        body = Text(self.text[-_MAX_VISIBLE_CHARS:] if self.text else "(waiting for first token...)")
+        # The visible reply owns the panel once it starts; before that, show the
+        # reasoning stream so a long silent lead-in (build/optimize thinking
+        # through a 100-card pool) reads as work happening, not a hang.
+        if self.text:
+            body = Text(self.text[-_MAX_VISIBLE_CHARS:])
+        elif self.thinking:
+            body = Text(self.thinking[-_MAX_VISIBLE_CHARS:], style="dim italic")
+        else:
+            body = Text("(waiting for first token...)")
         body.append("\n\n")
         if self.done:
             style = "bold red" if self.is_error else "bold green"
@@ -80,8 +89,8 @@ class _CallPane:
 
 
 class LiveView:
-    """Context manager wrapping one nightly run. Thread-safe — ideate's 3
-    parallel subprocess calls all update this concurrently."""
+    """Context manager wrapping one nightly run. Thread-safe — the draft
+    stage's 3 parallel subprocess calls all update this concurrently."""
 
     def __init__(self) -> None:
         self._panes: dict[str, _CallPane] = {}
@@ -141,6 +150,13 @@ class LiveView:
                 pane.text += chunk
         self._refresh()
 
+    def _append_thinking(self, stage: str, chunk: str) -> None:
+        with self._lock:
+            pane = self._panes.get(stage)
+            if pane is not None:
+                pane.thinking += chunk
+        self._refresh()
+
     def _set_status(self, stage: str, status: str) -> None:
         with self._lock:
             pane = self._panes.get(stage)
@@ -168,6 +184,9 @@ class _CallHandle:
 
     def append_text(self, chunk: str) -> None:
         self._view._append_text(self._stage, chunk)
+
+    def append_thinking(self, chunk: str) -> None:
+        self._view._append_thinking(self._stage, chunk)
 
     def set_status(self, status: str) -> None:
         self._view._set_status(self._stage, status)

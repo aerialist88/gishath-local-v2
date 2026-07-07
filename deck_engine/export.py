@@ -280,8 +280,8 @@ def _build_summary_sheet(wb: Workbook, deck: DeckResult, pricing: PricingOutcome
         rows.append((
             "Rebuilt mid-run",
             f"The first build was discarded — its gameplan depended on an ability the commander/a key "
-            f"card doesn't actually have: \"{deck.retry_reason}\". Re-ran ideation with the real oracle "
-            f"text and a note about that specific mistake; this deck is the corrected result.",
+            f"card doesn't actually have: \"{deck.retry_reason}\". Re-ran the parallel drafts with the "
+            f"real oracle text and a note about that specific mistake; this deck is the corrected result.",
         ))
     rows.append(("Generated", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")))
     for i, (label, text) in enumerate(rows, start=2):

@@ -21,8 +21,9 @@ port 5003) — the home screen warns when it isn't.
   knobs from Guild rules, last-delivered plaque, gallery shelf. The
   "rehearsal" link plays a scripted demo run — full live view, no API spend.
 - **Workshop / live run (1a, 3b)** — streaming benches per `claude -p` call
-  (three parallel apprentices at ideate, the Master Deckwright at repair),
-  8-node stage gauge, ledger of finished calls, crucible spend plaque,
+  (three parallel deckwrights each drafting a whole deck, the Adjudicator
+  judging, the Master Deckwright at repair),
+  7-node stage gauge, ledger of finished calls, crucible spend plaque,
   Elapsed/Spend/Calls header. Reconnect-safe: reload mid-run and the view
   resumes from a snapshot.
 - **Failure (3c)** — rust header, spend-by-stage bars, recommission /

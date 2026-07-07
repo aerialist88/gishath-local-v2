@@ -5,5 +5,5 @@ for pricing rather than duplicating any scraping code. See
 PRD_nightly_deck_engine.md (repo root's parent folder) for the full spec.
 
 Pipeline (config.PIPELINE_STAGES order):
-    select -> ideate -> build -> validate -> optimize -> price -> export -> deliver
+    select -> draft (×3 parallel whole-deck drafts) -> judge -> validate -> optimize -> price -> export -> deliver
 """

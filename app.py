@@ -33,12 +33,14 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 
 import httpx
 from flask import Flask, jsonify, render_template, request, send_file
 
+import card_index
 from engine_client import ENGINE_BASE, ENGINE_PORT, search_many
 from export.excel import write_excel
 from optimizer import compute_plan, rows_to_results
@@ -89,12 +91,20 @@ def _cors(response):
 # ── Engine subprocess ─────────────────────────────────────────────────────────
 _BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 ENGINE_BIN  = os.path.join(_BASE_DIR, "bin", "gishath-engine")
+ENGINE_LOG_PATH = os.path.join(_log_dir, "engine.log")
 _engine_proc: subprocess.Popen | None = None
+_engine_log_fh = None                  # open file handle for engine output (kept to avoid GC)
+_engine_lock = threading.Lock()        # serialise spawn/relaunch across request threads
+
+# Overall wall-clock budget for a single /search request. The engine and the
+# Playwright path share this deadline; whichever is still running when it
+# elapses is abandoned so a stalled BinderPOS scrape can't hang the response.
+SEARCH_BUDGET_SECONDS: float = 60.0
 
 # Stores handled by the Go engine.
 #
 # Non-BinderPOS stores (direct HTTP, no Cloudflare issue):
-#   Agora Hobby, Cards & Collections, Dueller's Point, 5 Mana, Mox & Lotus
+#   Cards & Collections, Dueller's Point, 5 Mana, Mox & Lotus
 #
 # BinderPOS stores routed through the engine (uses BinderPOS decklist API at
 # portal.binderpos.com — bypasses per-store Cloudflare; more reliable than
@@ -106,8 +116,13 @@ _engine_proc: subprocess.Popen | None = None
 # issued despite a request sent 2026-05-24) is gone. The site was rebuilt
 # and the engine now calls its new unauthenticated /product/advancedfilter
 # endpoint directly — no token or env var needed.
+#
+# Agora Hobby moved to the Playwright path (2026-07-06): Cloudflare turned on
+# an interactive Turnstile challenge site-wide, confirmed blocking the Go
+# engine's plain HTTP client, curl, and even curl_cffi's Chrome-TLS
+# impersonation alike — only a real/headless browser can solve it. See
+# playwright_scraper.py's BINDERPOS_STORES (variant 4).
 ENGINE_STORES = [
-    "Agora Hobby",
     "Cards & Collections",
     "Dueller's Point",
     "5 Mana",
@@ -119,9 +134,17 @@ ENGINE_STORES = [
 ]
 
 
-def _start_engine() -> None:
-    """Spawn the engine binary and wait until it reports healthy."""
-    global _engine_proc
+def _spawn_engine() -> subprocess.Popen:
+    """Launch the engine binary, redirecting its output to ENGINE_LOG_PATH.
+
+    CRITICAL (root cause of the engine going dead after some use): the engine
+    logs several lines per shop on every search. If its stdout is a PIPE that
+    nobody drains, the OS pipe buffer (~64 KB) fills and the engine BLOCKS on
+    its next write — going unresponsive after a handful of searches, which
+    silently drops all engine stores until a manual restart. Writing to a real
+    file removes that failure mode entirely while preserving the engine's logs.
+    """
+    global _engine_log_fh
 
     if not os.path.isfile(ENGINE_BIN):
         log.error(
@@ -133,41 +156,94 @@ def _start_engine() -> None:
         )
         sys.exit(1)
 
+    # Append so engine history survives relaunches; line-buffered.
+    _engine_log_fh = open(ENGINE_LOG_PATH, "a", buffering=1, encoding="utf-8")
+    _engine_log_fh.write(f"\n===== engine launch {datetime.now():%Y-%m-%d %H:%M:%S} =====\n")
+    _engine_log_fh.flush()
+
     env = {**os.environ, "GISHATH_ENGINE_PORT": ENGINE_PORT}
-    _engine_proc = subprocess.Popen(
+    proc = subprocess.Popen(
         [ENGINE_BIN],
         env=env,
-        stdout=subprocess.PIPE,
+        stdout=_engine_log_fh,
         stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
     )
-    log.info("gishath-engine started  PID=%d  port=%s", _engine_proc.pid, ENGINE_PORT)
+    log.info(
+        "gishath-engine started  PID=%d  port=%s  (output → %s)",
+        proc.pid, ENGINE_PORT, ENGINE_LOG_PATH,
+    )
+    return proc
 
-    # Poll /healthz until ready or timeout
-    deadline = time.monotonic() + 20.0
+
+def _engine_is_healthy() -> bool:
+    """Fast liveness probe — one cheap /healthz call."""
+    try:
+        return httpx.get(f"{ENGINE_BASE}/healthz", timeout=1.0).status_code == 200
+    except Exception:
+        return False
+
+
+def _wait_healthy(proc: subprocess.Popen, timeout: float) -> bool:
+    """Poll /healthz until the engine is ready, the process exits, or timeout."""
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if _engine_proc.poll() is not None:
-            out, _ = _engine_proc.communicate()
-            log.error("Engine exited unexpectedly:\n%s", out or "(no output)")
-            sys.exit(1)
-        try:
-            r = httpx.get(f"{ENGINE_BASE}/healthz", timeout=1.0)
-            if r.status_code == 200:
-                log.info("gishath-engine healthy on %s", ENGINE_BASE)
-                return
-        except Exception:
-            pass
+        if proc.poll() is not None:
+            return False  # process exited during startup
+        if _engine_is_healthy():
+            return True
         time.sleep(0.4)
+    return False
 
-    log.error("Engine did not become healthy within 20 s. Aborting.")
+
+def _engine_tail(n: int = 20) -> str:
+    """Last n lines of the engine log — for diagnosing a failed (re)launch."""
+    try:
+        with open(ENGINE_LOG_PATH, "r", encoding="utf-8", errors="replace") as fh:
+            return "".join(fh.readlines()[-n:]) or "(no output)"
+    except Exception:
+        return "(engine log unavailable)"
+
+
+def _start_engine() -> None:
+    """Spawn the engine at boot and wait until healthy, or abort."""
+    global _engine_proc
+    with _engine_lock:
+        _engine_proc = _spawn_engine()
+        if _wait_healthy(_engine_proc, 20.0):
+            log.info("gishath-engine healthy on %s", ENGINE_BASE)
+            return
+        log.error("Engine did not become healthy within 20 s:\n%s", _engine_tail())
     _stop_engine()
     sys.exit(1)
 
 
-def _stop_engine() -> None:
-    """Gracefully terminate the engine subprocess."""
+def _ensure_engine_healthy() -> bool:
+    """If the engine is down, relaunch it once. Returns True if healthy.
+
+    Mirrors the Playwright path's _ensure_browser_healthy(): a crash no longer
+    silently drops every engine store until a manual restart — the next search
+    revives it. Costs only one cheap /healthz call on the common (healthy) path.
+    """
     global _engine_proc
+    if _engine_is_healthy():
+        return True
+    with _engine_lock:
+        # Re-check inside the lock — another request thread may have just revived it.
+        if _engine_is_healthy():
+            return True
+        log.warning("Engine unresponsive — relaunching.")
+        _stop_engine()
+        _engine_proc = _spawn_engine()
+        if _wait_healthy(_engine_proc, 20.0):
+            log.info("gishath-engine relaunched and healthy.")
+            return True
+        log.error("Engine relaunch failed:\n%s", _engine_tail())
+        return False
+
+
+def _stop_engine() -> None:
+    """Gracefully terminate the engine subprocess and close its log handle."""
+    global _engine_proc, _engine_log_fh
     if _engine_proc is None:
         return
     pid = _engine_proc.pid
@@ -183,6 +259,12 @@ def _stop_engine() -> None:
         log.warning("Error stopping engine: %s", exc)
     finally:
         _engine_proc = None
+        if _engine_log_fh is not None:
+            try:
+                _engine_log_fh.close()
+            except Exception:
+                pass
+            _engine_log_fh = None
 
 
 def _shutdown() -> None:
@@ -236,6 +318,17 @@ def health():
     return jsonify({"ok": True})
 
 
+@app.route("/api/autocomplete")
+def autocomplete():
+    """Card-name suggestions for the buy-list box (local Scryfall index).
+
+    Suggestions are a nicety: an empty list (too-short query, index still
+    warming up, or no match) is a normal 200, never an error.
+    """
+    query = request.args.get("q", "")
+    return jsonify(card_index.search(query))
+
+
 @app.route("/search", methods=["POST"])
 def search():
     body = request.get_json(force=True, silent=True) or {}
@@ -249,26 +342,86 @@ def search():
         return jsonify({"error": "No valid card names supplied (minimum 3 characters each)."}), 400
 
     t0 = time.monotonic()
+
+    # Run Go engine (non-BinderPOS) and Playwright (BinderPOS) concurrently.
+    # The engine runs its own asyncio.run(); Playwright submits to its
+    # persistent background loop via run_async(). Both are submitted to a
+    # ThreadPoolExecutor so they overlap in wall-clock time.
+    #
+    # The two paths are collected INDEPENDENTLY. A timeout or crash in one
+    # must NOT discard the other's results: engine results (fast, reliable)
+    # should still render when the Playwright/BinderPOS path stalls on
+    # Cloudflare challenges or 429 rate-limiting (and vice-versa). A shared
+    # wall-clock deadline bounds the total request time; whichever future is
+    # still running when the deadline passes is abandoned (its background
+    # thread finishes harmlessly and its result is discarded).
+    def _run_engine():
+        # Revive the engine if it died since the last search (see _ensure_engine_healthy).
+        _ensure_engine_healthy()
+        return asyncio.run(search_many(buy_list, stores=ENGINE_STORES))
+
+    # Playwright publishes completed per-store results into pw_partial as it
+    # goes, so if it blows the wall-clock budget below we can still keep the
+    # stores/cards that finished instead of discarding the whole path. pw_lock
+    # guards the cross-thread read (Flask thread) vs writes (Playwright loop).
+    pw_partial: dict[str, dict] = {}
+    pw_lock = threading.Lock()
+
+    def _run_playwright():
+        return run_async(search_many_playwright(buy_list, sink=pw_partial, sink_lock=pw_lock))
+
+    engine_results: dict[str, dict] = {}
+    playwright_results: dict[str, dict] = {}
+    soft_errors: list[dict] = []
+    deadline = t0 + SEARCH_BUDGET_SECONDS
+
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
     try:
-        # Run Go engine (non-BinderPOS) and Playwright (BinderPOS) concurrently.
-        # The engine runs its own asyncio.run(); Playwright submits to its
-        # persistent background loop via run_async(). Both are submitted to a
-        # ThreadPoolExecutor so they overlap in wall-clock time.
-        def _run_engine():
-            return asyncio.run(search_many(buy_list, stores=ENGINE_STORES))
+        eng_future = pool.submit(_run_engine)
+        pw_future  = pool.submit(_run_playwright)
 
-        def _run_playwright():
-            return run_async(search_many_playwright(buy_list))
+        try:
+            engine_results = eng_future.result(timeout=max(0.1, deadline - time.monotonic()))
+        except concurrent.futures.TimeoutError:
+            log.error("Engine search exceeded %.0fs budget — continuing without engine results", SEARCH_BUDGET_SECONDS)
+            soft_errors.append({"store": "engine", "error": f"timed out (>{SEARCH_BUDGET_SECONDS:.0f}s)"})
+        except Exception as exc:
+            log.exception("Engine search failed: %s", exc)
+            soft_errors.append({"store": "engine", "error": str(exc)})
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-            eng_future = pool.submit(_run_engine)
-            pw_future  = pool.submit(_run_playwright)
-            engine_results     = eng_future.result(timeout=60)
-            playwright_results = pw_future.result(timeout=60)
+        try:
+            playwright_results = pw_future.result(timeout=max(0.1, deadline - time.monotonic()))
+        except concurrent.futures.TimeoutError:
+            # Don't discard the whole path — keep the stores/cards that finished.
+            # The coroutine keeps running on its loop; snapshot pw_partial (deep
+            # enough that later appends can't mutate what we return) under the lock.
+            with pw_lock:
+                playwright_results = {
+                    name: {"cards": list(v["cards"]), "errors": list(v["errors"])}
+                    for name, v in pw_partial.items()
+                }
+            got = sum(1 for v in playwright_results.values() if v["cards"] or v["errors"])
+            log.error(
+                "Playwright search exceeded %.0fs budget — keeping partial results (%d/%d cards had data)",
+                SEARCH_BUDGET_SECONDS, got, len(buy_list),
+            )
+            soft_errors.append({
+                "store": "Playwright (BinderPOS)",
+                "error": f"timed out (>{SEARCH_BUDGET_SECONDS:.0f}s); kept partial results for {got}/{len(buy_list)} cards",
+            })
+        except Exception as exc:
+            log.exception("Playwright search failed: %s", exc)
+            soft_errors.append({"store": "Playwright (BinderPOS)", "error": str(exc)})
+    finally:
+        # wait=False so we never block the response on a future that's still
+        # stuck (e.g. Playwright on a Cloudflare interstitial).
+        pool.shutdown(wait=False)
 
-    except Exception as exc:
-        log.exception("Search failed: %s", exc)
-        return jsonify({"error": "Search failed. Check server logs."}), 500
+    # Hard-fail only if BOTH paths produced nothing at all — otherwise return
+    # whatever succeeded and surface the failure as a store error chip.
+    if not engine_results and not playwright_results:
+        log.error("Search failed: both engine and Playwright returned no data")
+        return jsonify({"error": "Search failed — no data from engine or Playwright. Check server logs."}), 500
 
     elapsed = round(time.monotonic() - t0, 1)
     results_by_card = _merge_results(engine_results, playwright_results, buy_list)
@@ -283,6 +436,13 @@ def search():
             if store not in seen_stores:
                 seen_stores.add(store)
                 store_errors.append({"store": store, "error": err.get("error", "")})
+
+    # Surface path-level failures (engine/Playwright timeout or crash) as chips too.
+    for serr in soft_errors:
+        store = serr.get("store", "?")
+        if store not in seen_stores:
+            seen_stores.add(store)
+            store_errors.append(serr)
 
     return jsonify({
         "results":      rows,

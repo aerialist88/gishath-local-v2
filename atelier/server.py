@@ -17,13 +17,20 @@ from flask import Flask, Response, jsonify, request, send_file, send_from_direct
 
 from deck_engine import config, run_log
 
-from . import archive, art, settings
+from . import archive, art, commanders, settings
 from .runner import MANAGER, RUNS_DIR
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 PORT = int(os.environ.get("ATELIER_PORT", 5077))
 
 app = Flask(__name__, static_folder=None)
+
+
+@app.after_request
+def _cors(response):
+    response.headers["Access-Control-Allow-Origin"] = "http://localhost:5010"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
 
 
 # ── frontend ─────────────────────────────────────────────────────────────────
@@ -186,6 +193,12 @@ def card_art():
     if entry is None:
         return jsonify({"pending": True}), 202
     return jsonify(entry)
+
+
+@app.route("/api/commanders")
+def commander_search():
+    query = request.args.get("q", "")
+    return jsonify(commanders.search(query))
 
 
 # ── guild rules ──────────────────────────────────────────────────────────────

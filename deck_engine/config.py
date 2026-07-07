@@ -98,19 +98,25 @@ DEDUPE_ARCHETYPE_SOFT_DAYS: int = 30  # soft: bias away from, don't hard-block
 
 # ── Agent pipeline shape (PRD §5 / §8 step 4) ────────────────────────────────
 
-IDEATION_SUBAGENTS: int = 3   # angles/lines explored in parallel before build picks one
+# Widened back out 2026-07-06 (Trevor's call — "cooler to see 3 agents working
+# at the same time"): each subagent now drafts a COMPLETE deck in parallel, not
+# just an angle proposal; a judge stage picks the winner. Replaces the old
+# ideate×3 -> synthesize -> single-build chain (roughly cost-neutral: 3 big
+# sonnet drafts ≈ 3 small ideates + 1 big build).
+DRAFT_SUBAGENTS: int = 3   # complete decks drafted in parallel before the judge picks one
 
 # Model tier per stage. Opus on `select` and `optimize` only (2026-07-01,
 # after a real run's deck was built around a hallucinated commander ability —
 # see agent_pipeline.py's oracle-text grounding for the actual fix; Opus here
 # is the fact-checking backstop on top of that, not a substitute for it).
 # Sonnet everywhere else — Opus is ~4-5x Sonnet cost (PRD §4 constraints), and
-# ideate/build/validate_repair are grounded in real oracle text now, so the
-# marginal value of Opus there is lower than on the two single-call stages.
+# draft/validate_repair are grounded in real oracle text now, so the marginal
+# value of Opus there is lower than on the single-call stages. `draft` runs
+# DRAFT_SUBAGENTS calls in parallel, so an Opus tier there multiplies.
 MODEL_TIERS: dict = {
     "select": os.environ.get("DECK_ENGINE_SELECT_MODEL", "opus"),
-    "ideate": "sonnet",
-    "build": "sonnet",
+    "draft": "sonnet",
+    "judge": "sonnet",
     "validate_repair": "sonnet",
     "optimize": os.environ.get("DECK_ENGINE_OPTIMIZE_MODEL", "opus"),
     # PRD v4 amendment T4: card_tags/mechanic-token extraction moved OFF Opus
@@ -120,23 +126,25 @@ MODEL_TIERS: dict = {
 }
 
 MAX_VALIDATE_REPAIR_ATTEMPTS: int = 3   # give the Scryfall repair loop this many tries before failing the run
-MAX_STRATEGY_RETRIES: int = 1           # if optimize's fact-check flags a broken premise, retry ideate->optimize this many times
+MAX_STRATEGY_RETRIES: int = 1           # if optimize's fact-check flags a broken premise, retry draft->optimize this many times
 
 # ── PRD v4 amendment §3.1 T5 — web-search gating ─────────────────────────────
-# Search stays enabled at select/ideate (2026-07-01's "let the models decide"
-# call, kept there deliberately — Trevor's explicit re-confirmation 2026-07-03).
-# build/validate_repair/optimize/card_tagger now pass this list explicitly as
-# claude_cli.run(disallowed_tools=...) at their call sites in agent_pipeline.py
-# — a global on/off switch here wouldn't work cleanly since e.g. "ideate" and
-# "synthesize" share the same MODEL_TIERS key but have different search
-# policies (synthesize is left unrestricted — not named in the PRD's resolved
-# decision, status quo preserved).
+# Search stays enabled at select only. It WAS also enabled at the old
+# standalone ideate stage (2026-07-01's "let the models decide" call, Trevor's
+# re-confirmation 2026-07-03), but the 2026-07-06 widen-back-out folded
+# ideation into the build-shaped parallel draft calls, which follow build's
+# no-search policy — 3 parallel search-enabled builds could blow the crucible
+# cap on a bad night. draft/validate_repair/optimize/card_tagger pass this
+# list explicitly as claude_cli.run(disallowed_tools=...) at their call sites
+# in agent_pipeline.py; judge reasons only over material already in its prompt.
 DISALLOWED_SEARCH_TOOLS: list[str] = ["WebSearch", "WebFetch"]
 
 # ── PRD v4 amendment §3.2 — synergy grounding ────────────────────────────────
-# S2: role-quota RANGES the synthesize stage can adjust per build brief
-# (defaults below); build.md is instructed to target these unless the brief
-# specifically argues for deviating.
+# S2: role-quota RANGES rendered into every parallel draft prompt (draft.md),
+# which is instructed to target them unless its angle genuinely argues for
+# deviating. (S2's original per-brief adjustment lived in the synthesize
+# stage, retired by the 2026-07-06 widen-back-out — drafts build before any
+# brief exists, so the defaults ARE the targets now.)
 ROLE_QUOTA_DEFAULTS: dict = {
     "land_min": 35, "land_max": 38,
     "ramp_min": 10, "ramp_max": 12,
@@ -180,6 +188,21 @@ MAX_RUN_SPEND_USD: float = float(os.environ.get("DECK_ENGINE_MAX_RUN_SPEND_USD",
 # picking up unwanted framing from an earlier stage's session) per the PRD's
 # own caution.
 RESUME_SESSION_CHAINING: bool = os.environ.get("DECK_ENGINE_RESUME_CHAINING", "").strip().lower() in ("1", "true", "yes")
+
+# ── Extended thinking — live-view richness ───────────────────────────────────
+# When > 0, every `claude -p` subprocess is spawned with
+# MAX_THINKING_TOKENS=<this> in its environment, which turns on extended
+# thinking for the call. What the live view can show depends on the model
+# tier (confirmed against a real sonnet capture, 2026-07-07 — see
+# claude_cli._feed_view): haiku streams its actual reasoning text; sonnet and
+# opus stream REDACTED thinking (empty text + a running estimated_tokens
+# counter), which the benches surface as a ticking "thinking it through…
+# ~N tokens" status instead of raw prose. The readable in-progress text on
+# the big sonnet/opus benches comes from the prompts' narrate-out-loud
+# instructions, not from thinking. Thinking tokens bill as OUTPUT tokens
+# either way, so a non-zero budget raises per-run cost; 0 disables entirely
+# (the pre-2026-07-05 behaviour: no thinking, quieter and cheaper calls).
+THINKING_BUDGET_TOKENS: int = int(os.environ.get("DECK_ENGINE_THINKING_BUDGET_TOKENS", "6000"))
 
 # Claude CLI binary — override via env if `claude` isn't on PATH in the
 # environment run_nightly.sh executes in (e.g. cron-like shells often have a
