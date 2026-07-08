@@ -41,6 +41,7 @@ import httpx
 from flask import Flask, jsonify, render_template, request, send_file
 
 import card_index
+import ck_price
 from engine_client import ENGINE_BASE, ENGINE_PORT, search_many
 from export.excel import write_excel
 from optimizer import compute_plan, rows_to_results
@@ -268,7 +269,9 @@ def _stop_engine() -> None:
 
 
 def _shutdown() -> None:
-    """Ordered shutdown: Playwright first, then engine."""
+    """Ordered shutdown: CK price refresher first (daemon thread, cheapest to
+    stop), then Playwright, then engine."""
+    ck_price.stop_background_refresher()
     stop_browser()
     _stop_engine()
 
@@ -342,6 +345,12 @@ def search():
         return jsonify({"error": "No valid card names supplied (minimum 3 characters each)."}), 400
 
     t0 = time.monotonic()
+
+    # Card Kingdom reference price — pure local file read (state/ck_prices.json,
+    # refreshed nightly by refresh_ck_prices.py), no network call, negligible
+    # latency. None per-card if the cache is missing, stale (>48h), or has no
+    # listing for that name — /search never blocks on or fails because of this.
+    ck_prices = ck_price.get_prices_for_buy_list(buy_list)
 
     # Run Go engine (non-BinderPOS) and Playwright (BinderPOS) concurrently.
     # The engine runs its own asyncio.run(); Playwright submits to its
@@ -449,6 +458,7 @@ def search():
         "elapsed":      elapsed,
         "store_errors": store_errors,
         "skipped":      skipped,
+        "ck_prices":    ck_prices,
     })
 
 
@@ -556,7 +566,18 @@ def download():
     except Exception as exc:
         log.warning("Shopping plan computation failed (export will still work): %s", exc)
 
-    xlsx_bytes = write_excel(rows, plan=plan)
+    # Recompute CK reference prices from the row's own card names rather than
+    # relying on the client to echo back what /search returned — same local
+    # file read, no network call, and works even if a client ever posts rows
+    # without ck_prices attached.
+    ck_prices: dict = {}
+    try:
+        card_names = list({r.get("card", "") for r in rows if r.get("card")})
+        ck_prices = ck_price.get_prices_for_buy_list(card_names)
+    except Exception as exc:
+        log.warning("CK price lookup failed (export will still work): %s", exc)
+
+    xlsx_bytes = write_excel(rows, plan=plan, ck_prices=ck_prices)
     timestamp  = datetime.now().strftime("%Y-%m-%d_%H-%M")
     filename   = f"gishath_results_{timestamp}.xlsx"
 
@@ -573,6 +594,7 @@ def download():
 if __name__ == "__main__":
     _start_engine()
     start_browser()   # Playwright Chromium (background thread + event loop)
+    ck_price.start_background_refresher()  # self-healing CK price cache (see ck_price.py)
 
     port = int(os.environ.get("PORT", 5003))
     log.info("Flask app starting on http://127.0.0.1:%d", port)

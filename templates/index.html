@@ -163,6 +163,23 @@
     }
     .listing-link:hover { color: #93c5fd; text-decoration: underline; }
 
+    /* Card Kingdom reference-price row — one per card, sits above that card's
+       store listings. Distinct amber accent so it reads as a benchmark, not
+       another store result. */
+    .ck-price-row td {
+      background: #17130a !important; border-top: 1px solid #3a2a10 !important;
+      border-bottom: 1px dashed #2d3148 !important; padding: 7px 14px !important;
+    }
+    .ck-price-cell { color: #d1a35c; font-size: 0.82rem; }
+    .ck-price-badge {
+      display: inline-block; background: linear-gradient(135deg, #78350f, #92400e);
+      color: #fde68a; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em;
+      padding: 2px 8px; border-radius: 6px; margin-right: 6px; text-transform: uppercase;
+      vertical-align: middle;
+    }
+    .ck-price-cell a.listing-link { color: #f0b862; }
+    .ck-price-cell a.listing-link:hover { color: #fbd38a; }
+
     /* Toggle-more row */
     .toggle-row td {
       padding: 6px 14px !important; border-top: 1px dashed #2d3148 !important;
@@ -310,6 +327,7 @@
 <script>
   let lastResults = [];
   let storeErrorDetails = [];
+  let lastCkPrices = {};
 
   // ── Helpers ──────────────────────────────────────────────────────────────
   function esc(str) {
@@ -349,8 +367,9 @@
       const data = await resp.json();
       lastResults = data.results;
       storeErrorDetails = data.store_errors || [];
+      lastCkPrices = data.ck_prices || {};
 
-      renderResults(lastResults);
+      renderResults(lastResults, lastCkPrices);
       renderSummary(data);
 
     } catch (err) {
@@ -410,7 +429,8 @@
   }
 
   // ── Render results table ──────────────────────────────────────────────────
-  function renderResults(results) {
+  function renderResults(results, ckPrices) {
+    ckPrices = ckPrices || {};
     const tbody = document.getElementById("resultsBody");
     tbody.innerHTML = "";
 
@@ -426,6 +446,15 @@
       const visible = rows.filter(r => !r.hidden);
       const hidden  = rows.filter(r => r.hidden);
       const gId = `g${groupIdx++}`;
+
+      // Card Kingdom reference price — one banner row per card, above its
+      // store listings. Absent entirely (no row) if the cache has nothing
+      // fresh for this card, same "omit rather than guess" behavior as the
+      // backend.
+      const ckPrice = ckPrices[cardName];
+      if (ckPrice) {
+        tbody.appendChild(buildCkPriceRow(ckPrice));
+      }
 
       // Render top-5 (or fewer) rows at full opacity
       for (const row of visible) {
@@ -496,6 +525,24 @@
     return tr;
   }
 
+  function buildCkPriceRow(price) {
+    const tr = document.createElement("tr");
+    tr.className = "ck-price-row";
+
+    const usd = Number(price.priceUsd || 0).toLocaleString("en-US", { style: "currency", currency: "USD" });
+    const edition = price.edition ? ` · ${esc(price.edition)}` : "";
+    const foil = price.isFoil ? " · Foil" : "";
+    const asOf = price.asOf ? ` · as of ${esc(price.asOf)}` : "";
+    const link = price.url
+      ? ` · <a href="${esc(price.url)}" target="_blank" rel="noopener" class="listing-link">View listing</a>`
+      : "";
+
+    tr.innerHTML = `<td colspan="8" class="ck-price-cell">
+      <span class="ck-price-badge">Card Kingdom (US)</span>from <strong>${usd}</strong>${edition}${foil}${asOf}${link}
+    </td>`;
+    return tr;
+  }
+
   // ── Store errors modal ────────────────────────────────────────────────────
   function showErrors() {
     const modal   = document.getElementById("errorModal");
@@ -542,7 +589,7 @@
     document.getElementById("downloadBtn").classList.add("d-none");
     document.getElementById("search-summary").classList.add("d-none");
     document.getElementById("error-msg").classList.add("d-none");
-    lastResults = []; storeErrorDetails = [];
+    lastResults = []; storeErrorDetails = []; lastCkPrices = {};
   }
 
   // Ctrl+Enter to search (Cmd+Enter on macOS too)

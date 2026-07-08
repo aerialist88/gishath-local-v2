@@ -94,11 +94,13 @@ FG_STRAT_C_STORE = "14532D"   # dark green text on store header
 # Results sheet (unchanged logic from v1)
 # ═════════════════════════════════════════════════════════════════════════════
 
-RESULT_HEADERS    = ["Card", "Rank", "Store", "Listing Name", "Set / Printing", "Foil", "Quality", "Price (SGD)"]
-RESULT_COL_WIDTHS = [26, 7, 24, 44, 32, 7, 10, 14]
+RESULT_HEADERS    = ["Card", "Rank", "Store", "Listing Name", "Set / Printing", "Foil", "Quality", "Price (SGD)", "CK Reference (USD)"]
+RESULT_COL_WIDTHS = [26, 7, 24, 44, 32, 7, 10, 14, 20]
+
+FG_CK_REF = "B45309"  # amber — distinguishes the reference column from the SGD price column
 
 
-def _write_results_sheet(ws, rows: list[dict]) -> None:
+def _write_results_sheet(ws, rows: list[dict], ck_prices: dict | None = None) -> None:
     ws.title = "Results"
 
     hdr_fill = PatternFill("solid", fgColor=BG_HEADER)
@@ -113,6 +115,9 @@ def _write_results_sheet(ws, rows: list[dict]) -> None:
 
     ws.row_dimensions[1].height = 20
     ws.freeze_panes = "A2"
+
+    ck_prices = ck_prices or {}
+    ck_shown_for: set[str] = set()  # only the first row per card gets the CK reference value
 
     for row_num, row in enumerate(rows, 2):
         is_error = row.get("is_error", False)
@@ -159,6 +164,23 @@ def _write_results_sheet(ws, rows: list[dict]) -> None:
         else:
             _cell(8, row["price_val"], FG_PRICE, bold=True)
             ws.cell(row=row_num, column=8).number_format = '"SGD "#,##0.00'
+
+        # Card Kingdom reference price — shown once per card (first row of its
+        # group only), so it reads as a per-card benchmark, not a per-listing one.
+        card_name = row.get("card", "")
+        ck_price  = ck_prices.get(card_name) if card_name not in ck_shown_for else None
+        if card_name:
+            ck_shown_for.add(card_name)
+        if ck_price:
+            ck_cell = ws.cell(row=row_num, column=9, value=ck_price.get("priceUsd", 0))
+            ck_cell.number_format = '"USD "#,##0.00'
+            ck_cell.alignment = Alignment(horizontal="left", vertical="center")
+            ck_url = ck_price.get("url", "")
+            if ck_url:
+                ck_cell.hyperlink = ck_url
+                ck_cell.font = Font(color=FG_CK_REF, underline="single", bold=True, name="Calibri")
+            else:
+                ck_cell.font = Font(color=FG_CK_REF, bold=True, name="Calibri")
 
         ws.row_dimensions[row_num].height = 16
 
@@ -432,13 +454,16 @@ def _write_shopping_plan_sheet(ws, plan: "ShoppingPlan") -> None:
 # Public entry point
 # ═════════════════════════════════════════════════════════════════════════════
 
-def write_excel(rows: list[dict], plan=None) -> bytes:
+def write_excel(rows: list[dict], plan=None, ck_prices: dict | None = None) -> bytes:
     """Build an xlsx workbook and return as raw bytes.
 
     Args:
         rows: Display rows from format_results() — top-5 per card, no hidden rows.
         plan: Optional ShoppingPlan from compute_plan().  When provided, a second
               'Shopping Plan' sheet is added to the workbook.
+        ck_prices: Optional {card_name: listing|None} from ck_price.get_prices_for_buy_list().
+              When provided, adds a "CK Reference (USD)" column, populated once
+              per card. Omitted entirely (blank column) if not passed.
 
     Returns:
         Raw xlsx bytes suitable for send_file() or writing to disk.
@@ -446,7 +471,7 @@ def write_excel(rows: list[dict], plan=None) -> bytes:
     wb = Workbook()
 
     # Sheet 1 — Results
-    _write_results_sheet(wb.active, rows)
+    _write_results_sheet(wb.active, rows, ck_prices=ck_prices)
 
     # Sheet 2 — Shopping Plan (only if plan was computed)
     if plan is not None:

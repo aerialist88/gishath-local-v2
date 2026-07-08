@@ -1,7 +1,7 @@
 # Gishath Fetch v2 — Makefile
 # Run all commands from the gishath-local-v2/ directory.
 
-.PHONY: engine-build run sync-engine clean install-playwright atelier atelier-web help
+.PHONY: engine-build run sync-engine clean install-playwright atelier atelier-web ck-refresh help
 
 GO          = /usr/local/go/bin/go
 ENGINE_SRC  = engine-src/api
@@ -15,6 +15,7 @@ help:
 	@echo "  make atelier            The Deckwright's Atelier — native desktop window"
 	@echo "  make atelier-web        The Atelier in the browser (http://127.0.0.1:5077)"
 	@echo "  make sync-engine        Pull upstream fixes into the engine fork"
+	@echo "  make ck-refresh         Refresh the Card Kingdom reference-price cache (MTGJSON)"
 	@echo "  make clean              Remove the built engine binary"
 	@echo ""
 
@@ -36,6 +37,9 @@ atelier:
 
 atelier-web:
 	. venv/bin/activate && python -m atelier.server
+
+ck-refresh:
+	. venv/bin/activate && python refresh_ck_prices.py
 
 sync-engine:
 	@echo "Fetching upstream changes..."
