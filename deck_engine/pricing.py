@@ -40,6 +40,12 @@ class PricingOutcome:
     # downstream consumer (export breakdown, email headline/top-5) prices the
     # FINAL post-swap deck without knowing the budget pass exists.
     extra_assignments: list[tuple[str, float, str]] = field(default_factory=list)
+    # Card Kingdom (US) reference prices, straight off gishath-local-v2's
+    # /search response (ck_prices key — see ck_price.py there). Keyed by
+    # lowercased card name to match cheapest_by_card()'s convention. Purely a
+    # benchmark shown alongside the SGD shopping price, same as the main
+    # gishath fetch UI/export — no currency conversion, raw USD.
+    ck_prices: dict[str, dict] = field(default_factory=dict)
 
 
 def cheapest_by_card(pricing: "PricingOutcome") -> dict[str, tuple[float, str]]:
@@ -57,6 +63,14 @@ def cheapest_by_card(pricing: "PricingOutcome") -> dict[str, tuple[float, str]]:
     for name_key, price, store in pricing.extra_assignments:
         result[name_key] = (price, store)
     return result
+
+
+def ck_price_for_card(pricing: "PricingOutcome", card_name: str) -> dict | None:
+    """Card Kingdom (US) reference-price listing for one card, or None if the
+    gishath-local-v2 cache had nothing for it (missing, stale, or unlisted —
+    ck_price.py already collapsed those cases before we ever see the
+    payload). Purely a benchmark, never used in the SGD shopping total."""
+    return pricing.ck_prices.get(card_name.strip().lower())
 
 
 def deck_price_summary(pricing: "PricingOutcome", all_cards: list[str], top_n: int = 5) -> dict:
@@ -142,6 +156,15 @@ def fetch_prices(card_names: list[str]) -> PricingOutcome:
     # display rows the web UI exports today.
     rows = [r for r in payload.get("results", []) if not r.get("hidden", False)]
 
+    # Re-key by lowercased name (cheapest_by_card()'s convention) so
+    # ck_price_by_card() lookups below use the same key shape as every other
+    # per-card price lookup in this module.
+    ck_prices = {
+        name.strip().lower(): listing
+        for name, listing in (payload.get("ck_prices") or {}).items()
+        if listing
+    }
+
     try:
         results_by_card = optimizer.rows_to_results(rows)
         seen: set[str] = set()
@@ -153,6 +176,6 @@ def fetch_prices(card_names: list[str]) -> PricingOutcome:
                 buy_list.append(name)
         plan = optimizer.compute_plan(results_by_card, buy_list)
     except Exception as exc:  # noqa: BLE001 — pricing must never take down the whole run
-        return PricingOutcome(plan=None, rows=rows, available=True, error=f"compute_plan() failed: {exc}")
+        return PricingOutcome(plan=None, rows=rows, available=True, error=f"compute_plan() failed: {exc}", ck_prices=ck_prices)
 
-    return PricingOutcome(plan=plan, rows=rows, available=True)
+    return PricingOutcome(plan=plan, rows=rows, available=True, ck_prices=ck_prices)

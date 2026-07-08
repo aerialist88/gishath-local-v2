@@ -213,6 +213,9 @@ def enforce_card_cap(
         for key, (price, store) in added_prices.items():
             pricing.extra_assignments.append((key, price, store))
             cheapest[key] = (price, store)
+        # Carry the swapped-in cards' CK reference prices too, so the export's
+        # CK column doesn't just go blank for anything the budget pass touched.
+        pricing.ck_prices.update(reprice.ck_prices)
 
         # Record swaps + carry role/phase tags over so the breakdown sheet stays complete.
         for s in vetted:

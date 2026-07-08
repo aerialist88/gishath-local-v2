@@ -1138,6 +1138,7 @@ function decklistTab(deck) {
         <div class="rolegroup">
           <div class="rolegroup-head"><span class="serif">${esc(role)}</span><span class="count">${cards.length} card${cards.length > 1 ? "s" : ""}</span></div>
           ${cards.map((c) => `<div class="cardrow"><span class="card-name" data-card="${esc(c.name)}">${esc(c.name)}</span><span class="dotlead"></span>
+            ${c.ck_price_usd != null ? `<span class="ck-ref" title="Card Kingdom (US) reference price">${c.ck_url ? `<a href="${esc(c.ck_url)}" target="_blank" rel="noopener">CK $${c.ck_price_usd.toFixed(2)}</a>` : `CK $${c.ck_price_usd.toFixed(2)}`}</span>` : ""}
             <span class="price ${c.over_cap ? "flag" : ""}">${c.price_sgd != null ? c.price_sgd.toFixed(2) + (c.over_cap ? " ⚑" : "") : "—"}</span></div>`).join("")}
         </div>`).join("")}
     </div>
@@ -1169,11 +1170,12 @@ function decklistTab(deck) {
 function breakdownTab(deck) {
   return `<div style="padding:24px 0;overflow-x:auto">
     <table class="breakdown-table">
-      <thead><tr><th>Card</th><th>SG Price</th><th>Store</th><th>Role</th><th>Phase</th><th>CMC</th><th>Type</th><th>Rarity</th></tr></thead>
+      <thead><tr><th>Card</th><th>SG Price</th><th>Store</th><th>CK Ref (US)</th><th>Role</th><th>Phase</th><th>CMC</th><th>Type</th><th>Rarity</th></tr></thead>
       <tbody>${(deck.cards || []).map((c) => `<tr>
         <td class="card-name" data-card="${esc(c.name)}"${c.is_commander ? ' style="font-weight:700"' : ""}>${esc(c.name)}</td>
         <td class="mono ${c.over_cap ? "flag" : ""}" style="${c.over_cap ? "color:var(--rust)" : "color:#065f46"}">${c.price_sgd != null ? "SGD " + c.price_sgd.toFixed(2) + (c.over_cap ? " ⚑" : "") : "unavailable"}</td>
         <td class="mono">${esc(c.store || "—")}</td>
+        <td class="mono" style="color:var(--brass-dark)">${c.ck_price_usd != null ? (c.ck_url ? `<a href="${esc(c.ck_url)}" target="_blank" rel="noopener" style="color:inherit">USD ${c.ck_price_usd.toFixed(2)}</a>` : `USD ${c.ck_price_usd.toFixed(2)}`) : "—"}</td>
         <td>${esc(c.role)}</td><td>${esc(c.phase)}</td>
         <td class="mono">${c.cmc ?? ""}</td>
         <td style="color:var(--ink3)">${esc(c.type_line)}</td>

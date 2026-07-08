@@ -91,6 +91,11 @@ def _backfill_from_xlsx(rec: dict) -> dict | None:
             raw_price = _cell(row, 1)
             price = raw_price if isinstance(raw_price, (int, float)) else None
             store = _cell(row, 2)
+            # CK Price (US) column — added after this backfill path was first
+            # written, so older exports simply won't have it; index-9 stays
+            # None for those rows (row[i] guarded by _cell's length check).
+            raw_ck = _cell(row, 8)
+            ck_price = raw_ck if isinstance(raw_ck, (int, float)) else None
             cards.append({
                 "name": str(name),
                 "is_commander": i == 0,
@@ -99,6 +104,8 @@ def _backfill_from_xlsx(rec: dict) -> dict | None:
                 "price_sgd": round(float(price), 2) if price is not None else None,
                 "store": str(store) if store and store != "—" else None,
                 "over_cap": bool(price is not None and float(price) > config.MAX_CARD_PRICE_SGD),
+                "ck_price_usd": round(float(ck_price), 2) if ck_price is not None else None,
+                "ck_url": None,  # hyperlinks aren't recoverable from values_only=True reads
                 "cmc": _cell(row, 5),
                 "type_line": str(_cell(row, 6) or ""),
                 "rarity": str(_cell(row, 7) or ""),

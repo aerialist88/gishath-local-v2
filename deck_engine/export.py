@@ -52,6 +52,7 @@ FG_ROLE = "374151"
 FG_PHASE_EARLY = "1D4ED8"
 FG_PHASE_MID = "B45309"
 FG_PHASE_LATE = "15803D"
+FG_CK_REF = "B45309"  # amber — matches export/excel.py's CK reference column, distinct from the SGD price column
 _HEADER_BORDER = Border(bottom=Side(style="thin", color="D1D5DB"))
 _PHASE_COLOR = {"early": FG_PHASE_EARLY, "mid": FG_PHASE_MID, "late": FG_PHASE_LATE}
 
@@ -128,7 +129,7 @@ def save_moxfield_txt(deck: DeckResult, run_id: str) -> Path:
 
 def _build_breakdown_sheet(wb: Workbook, deck: DeckResult, pricing: PricingOutcome, cache: dict) -> None:
     ws = wb.create_sheet("Breakdown")
-    headers = ["Card", "SG Price (cheapest)", "Store", "Role", "Phase", "CMC", "Type", "Rarity"]
+    headers = ["Card", "SG Price (cheapest)", "Store", "Role", "Phase", "CMC", "Type", "Rarity", "CK Price (US)"]
     _style_header_row(ws, 1, headers)
 
     cheapest = pricing_mod.cheapest_by_card(pricing)
@@ -140,8 +141,9 @@ def _build_breakdown_sheet(wb: Workbook, deck: DeckResult, pricing: PricingOutco
         tag = deck.card_tags.get(key, {"role": "", "phase": ""})
         card = cache.get(key) or {}
         price_info = cheapest.get(key)
+        ck_price = pricing_mod.ck_price_for_card(pricing, name)
         return {"name": name, "role": tag.get("role", ""), "phase": tag.get("phase", ""),
-                "card": card, "price_info": price_info}
+                "card": card, "price_info": price_info, "ck_price": ck_price}
 
     commander_row = _row_data(commander)
     other_rows = [_row_data(name) for name in deck.cards]
@@ -187,6 +189,20 @@ def _build_breakdown_sheet(wb: Workbook, deck: DeckResult, pricing: PricingOutco
         ws.cell(row=row, column=7, value=card.get("type_line", "")).font = Font(color=FG_ROLE)
         ws.cell(row=row, column=8, value=(card.get("rarity") or "").title()).font = Font(color=FG_ROLE)
 
+        # Card Kingdom (US) reference price — pure benchmark, raw USD, no
+        # conversion, never rolled into the SGD total. Same source/semantics
+        # as the main gishath fetch UI/export (export/excel.py's CK column).
+        ck_price = data["ck_price"]
+        if ck_price:
+            ck_cell = ws.cell(row=row, column=9, value=round(ck_price.get("priceUsd", 0), 2))
+            ck_cell.number_format = '"USD" #,##0.00'
+            ck_url = ck_price.get("url", "")
+            if ck_url:
+                ck_cell.hyperlink = ck_url
+                ck_cell.font = Font(color=FG_CK_REF, underline="single", bold=True)
+            else:
+                ck_cell.font = Font(color=FG_CK_REF, bold=True)
+
         row += 1
 
     # Total row — sums only priced cards, clearly labelled if some are missing so
@@ -204,7 +220,7 @@ def _build_breakdown_sheet(wb: Workbook, deck: DeckResult, pricing: PricingOutco
     total_cell.font = Font(bold=True, color=FG_PRICE)
     total_cell.border = total_border
 
-    for col in (3, 4, 5, 6, 7, 8):
+    for col in (3, 4, 5, 6, 7, 8, 9):
         ws.cell(row=row, column=col).border = total_border
 
     row += 1
@@ -213,7 +229,7 @@ def _build_breakdown_sheet(wb: Workbook, deck: DeckResult, pricing: PricingOutco
         ws.cell(row=note_row, column=1,
                 value=f"Pricing unavailable this run: {pricing.error}").font = Font(color=FG_MISSING, italic=True)
 
-    _autosize(ws, {1: 30, 2: 16, 3: 22, 4: 18, 5: 8, 6: 6, 7: 24, 8: 12})
+    _autosize(ws, {1: 30, 2: 16, 3: 22, 4: 18, 5: 8, 6: 6, 7: 24, 8: 12, 9: 16})
     ws.freeze_panes = "A2"
 
 
@@ -422,6 +438,7 @@ def deck_json_payload(
         card = cache.get(key) or {}
         price_info = cheapest.get(key)
         price = round(price_info[0], 2) if price_info else None
+        ck_price = pricing_mod.ck_price_for_card(pricing, name)
         cards.append({
             "name": name,
             "is_commander": i == 0,
@@ -430,6 +447,8 @@ def deck_json_payload(
             "price_sgd": price,
             "store": price_info[1] if price_info else None,
             "over_cap": bool(price is not None and price > config.MAX_CARD_PRICE_SGD),
+            "ck_price_usd": round(ck_price["priceUsd"], 2) if ck_price else None,
+            "ck_url": ck_price.get("url") if ck_price else None,
             "cmc": card.get("cmc"),
             "type_line": card.get("type_line") or "",
             "rarity": (card.get("rarity") or ""),

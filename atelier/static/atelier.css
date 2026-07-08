@@ -449,6 +449,8 @@ main { min-height: calc(100vh - 70px); }
 .cardrow { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; font-size: 13px; }
 .cardrow .price { font-family: var(--mono); font-size: 11px; color: var(--ink3); }
 .cardrow .price.flag { color: var(--rust); }
+.cardrow .ck-ref { font-family: var(--mono); font-size: 10px; color: var(--brass-dark); white-space: nowrap; }
+.cardrow .ck-ref a { color: inherit; }
 
 .card-name { cursor: help; text-decoration-line: underline; text-decoration-style: dotted; text-decoration-color: var(--faint); text-underline-offset: 3px; }
 .card-name:hover { color: var(--brass-dark); }
