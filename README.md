@@ -2,10 +2,12 @@
 
 A personal Magic: The Gathering toolkit built around Commander (EDH), combining three linked apps: a multi-store price scraper/dashboard, an AI nightly deck-building engine, and a Forge-powered match simulator.
 
+Originally built as **Gishath Fetch**, a scraper for Singapore's local game stores (LGS); this repo is the v2 rewrite, renamed 3vor Fetch, that grew the pricing tool into the full toolkit described below.
+
 ## What's here
 
 ### 3vor Fetch — price scraper dashboard
-Takes a buy list and searches a wide range of Canadian/US singles vendors in parallel. A Go engine hits most stores directly over HTTP, while a persistent Playwright/Chromium browser handles the BinderPOS/Shopify stores that block plain requests. Results are merged into one price-comparison table with card art, price history, xlsx export, a price watchlist with email alerts, saved buy lists, and a Collection view for pricing an entire Moxfield collection in batches. Card Kingdom reference pricing (MTGJSON-sourced) fills in when a store is missing a card.
+Takes a buy list and searches Singapore's local game stores (LGS) in parallel, pricing everything in SGD. A Go engine hits most stores directly over HTTP, while a persistent Playwright/Chromium browser handles the BinderPOS/Shopify stores that block plain requests. Results are merged into one price-comparison table with card art, price history, xlsx export, a price watchlist with email alerts, saved buy lists, and a Collection view for pricing an entire Moxfield collection in batches. Card Kingdom reference pricing (MTGJSON-sourced) fills in when a local store is missing a card.
 
 ### The Deckwright's Atelier — AI deck-building UI
 A desktop (pywebview) or browser front end over `deck_engine`, a pipeline that has Claude draft a full budget-aware Commander deck:
