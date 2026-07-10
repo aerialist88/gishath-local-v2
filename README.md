@@ -2,7 +2,9 @@
 
 A personal Magic: The Gathering toolkit built around Commander (EDH), combining three linked apps: a multi-store price scraper/dashboard, an AI nightly deck-building engine, and a Forge-powered match simulator.
 
-Originally built as **Gishath Fetch**, a scraper for Singapore's local game stores (LGS); this repo is the v2 rewrite, renamed 3vor Fetch, that grew the pricing tool into the full toolkit described below.
+Originally built on top of [**Gishath Fetch**](https://github.com/xenodus/gishathfetch) by [xenodus](https://github.com/xenodus), a scraper for Singapore's local game stores (LGS) — huge thanks to xenodus for the original codebase. This repo is the v2 rewrite, renamed 3vor Fetch, that grew the pricing tool into the full toolkit described below.
+
+Everything in this repo is vibe-coded, built out of a love of playing EDH.
 
 ## What's here
 
@@ -34,3 +36,7 @@ Python/Flask + a Go pricing engine, Playwright for scraping, headless `claude -p
 ## Running it
 
 See the `Makefile` for targets (`make run`, `make atelier`, `make atelier-web`, `make gallery`, `make ck-refresh`, `make watchlist-check`). Each app's own README (`atelier/README.md`, `deck_engine/README.md`) has more detail on that piece.
+
+## Credits
+
+Built on top of [Gishath Fetch](https://github.com/xenodus/gishathfetch) by [xenodus](https://github.com/xenodus) — thank you for the original Singapore LGS scraper that this whole toolkit grew out of.
