@@ -335,16 +335,26 @@ def _stream_all_printings_listings(bz2_path: str, prices_by_uuid: dict[str, dict
     """Streams AllPrintings.json.bz2 one set at a time via ijson — memory
     footprint is bounded by the largest single set's card list (a few hundred
     cards), never the whole ~700-set catalog. Mirrors mtgjson_fetch.go's
-    decodeAllPrintingsSets / decodeSetCatalog."""
+    decodeAllPrintingsSets / decodeSetCatalog.
+
+    The Collection section's print-identity index (print_index.py) rides this
+    same pass as a free rider — same download, same stream, one extra dict per
+    set. Its hooks swallow their own errors so it can never break CK prices.
+    """
     import ijson
 
+    import print_index
+
     cheapest: dict[str, dict] = {}
+    print_index.collect_begin(prices_by_uuid)
     with bz2.BZ2File(bz2_path, "rb") as f:
         for set_code, set_obj in ijson.kvitems(f, "data"):
             set_name = set_obj.get("name") or set_code
             cards = set_obj.get("cards") or []
             aggregates = _aggregate_set_cards(cards, prices_by_uuid)
             _apply_set_aggregates(cheapest, set_name, aggregates)
+            print_index.collect_set(set_code, set_obj)
+    print_index.collect_finish()
     return cheapest
 
 

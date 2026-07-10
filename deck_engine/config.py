@@ -123,6 +123,8 @@ MODEL_TIERS: dict = {
     # entirely — these are cheap classification tasks (xlsx presentation
     # metadata, or naming a few keywords), never the deck-content stages.
     "card_tagger": os.environ.get("DECK_ENGINE_CARD_TAGGER_MODEL", "haiku"),
+    # A bounded, evidence-grounded Commander rehearsal launched from Atelier.
+    "simulate": os.environ.get("DECK_ENGINE_SIMULATE_MODEL", "sonnet"),
 }
 
 MAX_VALIDATE_REPAIR_ATTEMPTS: int = 3   # give the Scryfall repair loop this many tries before failing the run
@@ -157,7 +159,10 @@ ROLE_QUOTA_DEFAULTS: dict = {
 # false negatives; this is a backstop against egregious goodstuff piles, not
 # the primary quality mechanism). Tunable without a code change.
 SYNERGY_GATE_THRESHOLD: int = int(os.environ.get("DECK_ENGINE_SYNERGY_GATE_THRESHOLD", "25"))
-MAX_SYNERGY_REPAIR_ATTEMPTS: int = 2
+# 2 -> 1 (2026-07-10): the gate fired on 3 of the last 7 runs (vs the "<1 in 5"
+# design target) and each attempt is a draft-scale spend. One attempt keeps the
+# backstop; the ship-best-effort fallback below it is unchanged.
+MAX_SYNERGY_REPAIR_ATTEMPTS: int = int(os.environ.get("DECK_ENGINE_MAX_SYNERGY_REPAIR_ATTEMPTS", "1"))
 
 # ── PRD v4 amendment §3.4 — budget pass ──────────────────────────────────────
 # Per-card cap only — Trevor's explicit call (2026-07-03): NO total-deck cap;
@@ -203,6 +208,20 @@ RESUME_SESSION_CHAINING: bool = os.environ.get("DECK_ENGINE_RESUME_CHAINING", ""
 # either way, so a non-zero budget raises per-run cost; 0 disables entirely
 # (the pre-2026-07-05 behaviour: no thinking, quieter and cheaper calls).
 THINKING_BUDGET_TOKENS: int = int(os.environ.get("DECK_ENGINE_THINKING_BUDGET_TOKENS", "6000"))
+
+# Per-model thinking budgets (2026-07-10 token diet). Since sonnet/opus
+# thinking is REDACTED on the wire (see above), their budget bought only the
+# ticking counter while billing at output-token prices ON TOP of the visible
+# narration the prompts already demand — paying twice for reasoning on every
+# expensive call. Haiku keeps the global budget: its thinking streams as real
+# readable text on the live benches, and haiku calls are the cheap ones.
+# claude_cli.run() resolves the model's entry here, falling back to
+# THINKING_BUDGET_TOKENS for a model name not listed.
+THINKING_BUDGET_BY_MODEL: dict = {
+    "haiku": int(os.environ.get("DECK_ENGINE_THINKING_HAIKU_TOKENS", str(THINKING_BUDGET_TOKENS))),
+    "sonnet": int(os.environ.get("DECK_ENGINE_THINKING_SONNET_TOKENS", "0")),
+    "opus": int(os.environ.get("DECK_ENGINE_THINKING_OPUS_TOKENS", "0")),
+}
 
 # Claude CLI binary — override via env if `claude` isn't on PATH in the
 # environment run_nightly.sh executes in (e.g. cron-like shells often have a

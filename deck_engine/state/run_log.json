@@ -267,5 +267,67 @@
       "W"
     ],
     "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-08T14:16:49.485814+00:00",
+    "commander": "Toph, the First Metalbender",
+    "archetype": "Earthbend artifact-land death/return recursion toolbox",
+    "status": "success",
+    "colors": [
+      "G",
+      "R",
+      "W"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-09T14:27:37.597805+00:00",
+    "commander": "Isu the Abominable",
+    "archetype": "Bant (GUW) snow topdeck-cast value engine with +1/+1 counter payoff",
+    "status": "success",
+    "colors": [
+      "G",
+      "U",
+      "W"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-09T14:43:32.694102+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[draft/judge/validate/optimize] [optimize/attempt1/repair-1] claude -p returned is_error=true: You've hit your monthly spend limit \u00b7 raise it at claude.ai/settings/usage"
+  },
+  {
+    "timestamp": "2026-07-10T00:59:13.388896+00:00",
+    "commander": "Kudo, King Among Bears",
+    "archetype": "Selesnya (GW) \"everything's a Bear\" counters-tribal go-wide",
+    "status": "success",
+    "colors": [
+      "G",
+      "W"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-10T08:02:33.562626+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[draft/judge/validate/optimize] Deck failed validation after the draft-repair loop and could not be recovered:\n- Deck has 103 cards, expected 100 (commander + 99)."
+  },
+  {
+    "timestamp": "2026-07-10T08:09:36.054116+00:00",
+    "commander": "Hapatra, Vizier of Poisons",
+    "archetype": "Poison Rain \u2014 non-combat -1/-1 counter token-storm (Golgari proliferate/wrath Snakes, not aristocrats)",
+    "status": "success",
+    "colors": [
+      "B",
+      "G"
+    ],
+    "error_summary": ""
   }
 ]

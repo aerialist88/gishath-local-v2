@@ -19,6 +19,12 @@
         "ATELIER_PORT": "5078"
       },
       "port": 5078
+    },
+    {
+      "name": "gallery-static",
+      "runtimeExecutable": "/Users/trevorjow/Desktop/Cowork Playground/Local Gishath Fetch/gishath-local-v2/venv/bin/python",
+      "runtimeArgs": ["-m", "http.server", "5099", "--directory", "/Users/trevorjow/Desktop/Cowork Playground/Local Gishath Fetch/gishath-local-v2/gallery_site"],
+      "port": 5099
     }
   ]
 }

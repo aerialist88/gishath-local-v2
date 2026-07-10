@@ -49,8 +49,20 @@ fi
 
 # shellcheck disable=SC1091
 source venv/bin/activate
+
+# Price-watch alerts (state/watchlist.json, managed from the 3vor Fetch UI).
+# Runs before the deck engine so a deck-run failure can't skip it (set -e),
+# and is itself non-fatal — a broken watchlist check must never cost a deck.
+python check_watchlist.py || echo "watchlist check failed (non-fatal, deck run continues)"
+
 python -m deck_engine.run
 exit_code=$?
+
+# Re-bake the public gallery and push it to GitHub Pages so friends see
+# tonight's deck. Non-fatal — a publish/push hiccup must never fail the run,
+# and there's a fresh deck regardless. Skips the push until the one-time GitHub
+# setup in publish_gallery.sh's header is done.
+./publish_gallery.sh || echo "gallery publish failed (non-fatal)"
 
 echo "deck_engine run finished with exit code ${exit_code}."
 exit "$exit_code"

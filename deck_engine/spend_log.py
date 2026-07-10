@@ -33,7 +33,9 @@ def record(*, run_id: str, stage: str, model: str, cost_usd: float, num_turns: i
            duration_ms: int, is_error: bool, session_id: str,
            input_tokens: int = 0, output_tokens: int = 0,
            cache_creation_input_tokens: int = 0, cache_read_input_tokens: int = 0,
-           tools_used: list[str] | None = None) -> None:
+           tools_used: list[str] | None = None,
+           narration_chars: int = 0, thinking_chars: int = 0,
+           thinking_est_tokens: int = 0, structured_chars: int = 0) -> None:
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "run_id": run_id,
@@ -54,6 +56,15 @@ def record(*, run_id: str, stage: str, model: str, cost_usd: float, num_turns: i
         # fact instead of a permanent mystery. Empty list on nearly every
         # call; only non-empty if the model reached for something.
         "tools_used": tools_used or [],
+        # Output-token attribution (2026-07-10): where did the output go —
+        # visible narration, extended thinking, or the structured payload?
+        # Chars for the text streams; thinking_est_tokens is the redacted
+        # stream's own token counter (sonnet/opus). Zeros on records logged
+        # before this existed.
+        "narration_chars": narration_chars,
+        "thinking_chars": thinking_chars,
+        "thinking_est_tokens": thinking_est_tokens,
+        "structured_chars": structured_chars,
     }
     with config.SPEND_LOG_PATH.open("a") as f:
         f.write(json.dumps(entry) + "\n")

@@ -220,6 +220,66 @@
       border-top: 1px solid #1f2333; background: #151822;
     }
 
+    /* ── Card group header (art + name + watch + benchmark + trend) ── */
+    .group-row td {
+      background: #141826 !important; border-top: 2px solid #2d3148 !important;
+      border-bottom: 1px dashed #2d3148 !important; padding: 8px 14px !important;
+    }
+    .group-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .card-thumb {
+      width: 48px; height: 36px; object-fit: cover; border-radius: 6px;
+      border: 1px solid #2d3148; cursor: zoom-in; background: #0f1117; flex-shrink: 0;
+    }
+    .group-name { color: #e2e8f0; font-weight: 700; font-size: 0.95rem; }
+    .watch-btn {
+      background: none; border: none; cursor: pointer; font-size: 1.05rem;
+      color: #4b5563; padding: 0 2px; line-height: 1; transition: color .15s, transform .15s;
+    }
+    .watch-btn:hover { color: #facc15; transform: scale(1.2); }
+    .watch-btn.watched { color: #facc15; }
+    .trend-wrap { display: inline-flex; align-items: center; gap: 8px; color: #94a3b8; font-size: 0.78rem; }
+    .trend-up   { color: #f87171; }
+    .trend-down { color: #4ade80; }
+    .trend-flat { color: #64748b; }
+
+    /* Floating full-card preview (hover on thumbnail) */
+    #cardPreview { position: fixed; z-index: 2000; pointer-events: none; display: none; }
+    #cardPreview img { width: 250px; border-radius: 12px; box-shadow: 0 16px 48px rgba(0,0,0,.7); }
+
+    /* Saved-lists toolbar */
+    .list-select {
+      background: #0f1117; color: #cbd5e1; border: 1px solid #374151;
+      border-radius: 10px; padding: 9px 12px; font-size: 0.85rem; max-width: 220px;
+    }
+    .btn-mini {
+      background: #1f2937; color: #9ca3af; border: 1px solid #374151;
+      border-radius: 10px; padding: 10px 14px; font-size: 0.85rem; transition: all .2s;
+    }
+    .btn-mini:hover { background: #374151; color: #e2e8f0; }
+
+    /* Watchlist chips */
+    .watch-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: #191507; border: 1px solid #574a12; border-radius: 20px;
+      padding: 5px 12px; font-size: 0.78rem; color: #facc15;
+    }
+    .watch-chip .wc-target { color: #8a7a2a; }
+    .watch-chip button {
+      background: none; border: none; color: #8a7a2a; cursor: pointer;
+      font-size: 0.85rem; padding: 0; line-height: 1;
+    }
+    .watch-chip button:hover { color: #f87171; }
+    .watch-label {
+      color: #94a3b8; font-size: 0.78rem; text-transform: uppercase;
+      letter-spacing: 0.05em; font-weight: 600;
+    }
+
+    /* Prefill notice (Atelier → 3vor Fetch bridge) */
+    .prefill-notice {
+      background: #10151f; border: 1px solid #2d3148; border-radius: 10px;
+      color: #818cf8; font-size: 0.82rem; padding: 8px 14px;
+    }
+
     /* Scrollbar */
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: #0f1117; }
@@ -235,6 +295,7 @@
     <h1 class="hero-title mb-2">3vor Fetch</h1>
     <p style="color:#64748b; font-size:0.95rem;">
       Direct pricing across all Singapore LGS — no gishathfetch.com dependency
+      &nbsp;·&nbsp; <a href="/collection" style="color:#818cf8; text-decoration:none;">📦 Collection</a>
     </p>
   </div>
 
@@ -253,6 +314,22 @@
       <button class="btn btn-search" id="searchBtn" onclick="runSearch()">🔍 Search</button>
       <button class="btn btn-clear" onclick="clearAll()">✕ Clear</button>
       <button class="btn btn-download d-none" id="downloadBtn" onclick="downloadExcel()">⬇ Download Excel</button>
+      <span class="ms-auto"></span>
+      <select class="list-select" id="savedListSelect" onchange="loadSavedList()">
+        <option value="">Saved lists…</option>
+      </select>
+      <button class="btn btn-mini" onclick="saveCurrentList()" title="Save the current buy list under a name">💾 Save</button>
+      <button class="btn btn-mini" onclick="deleteSavedList()" title="Delete the selected saved list">🗑</button>
+    </div>
+
+    <!-- Prefill notice (deck sent over from the Atelier) -->
+    <div id="prefill-notice" class="prefill-notice mt-3 d-none"></div>
+
+    <!-- Price watches -->
+    <div id="watchlistPanel" class="d-none mt-3">
+      <span class="watch-label">★ Price watches</span>
+      <span style="color:#4b5563; font-size:0.75rem;"> — emailed by the nightly check when a card dips under its target</span>
+      <div id="watchChips" class="d-flex flex-wrap gap-2 mt-2"></div>
     </div>
 
     <!-- Loading -->
@@ -309,6 +386,9 @@
 
 </div><!-- /container -->
 
+<!-- Floating full-card image preview (hover on a thumbnail) -->
+<div id="cardPreview"><img alt=""></div>
+
 <!-- Store error detail modal (lightweight) -->
 <div id="errorModal" class="d-none" style="
   position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:1000;
@@ -328,6 +408,9 @@
   let lastResults = [];
   let storeErrorDetails = [];
   let lastCkPrices = {};
+  let lastArt = {};        // card name -> {art_crop, normal}
+  let lastHistory = {};    // card name -> {points: [[day, price], ...]}
+  let watchedMap = {};     // lowercased card name -> target SGD
 
   // ── Helpers ──────────────────────────────────────────────────────────────
   function esc(str) {
@@ -368,9 +451,13 @@
       lastResults = data.results;
       storeErrorDetails = data.store_errors || [];
       lastCkPrices = data.ck_prices || {};
+      lastArt = data.card_art || {};
+      lastHistory = data.history || {};
+      watchedMap = data.watched || {};
 
       renderResults(lastResults, lastCkPrices);
       renderSummary(data);
+      refreshWatchlist();
 
     } catch (err) {
       const el = document.getElementById("error-msg");
@@ -447,14 +534,12 @@
       const hidden  = rows.filter(r => r.hidden);
       const gId = `g${groupIdx++}`;
 
-      // Card Kingdom reference price — one banner row per card, above its
-      // store listings. Absent entirely (no row) if the cache has nothing
-      // fresh for this card, same "omit rather than guess" behavior as the
-      // backend.
-      const ckPrice = ckPrices[cardName];
-      if (ckPrice) {
-        tbody.appendChild(buildCkPriceRow(ckPrice));
-      }
+      // Group header — one banner row per card, above its store listings:
+      // card art thumbnail (hover = full card), watch star, Card Kingdom
+      // reference price, and the local price-history trend. Each piece is
+      // omitted individually when its data is missing, same "omit rather
+      // than guess" behavior as the backend.
+      tbody.appendChild(buildGroupHeader(cardName, rows));
 
       // Render top-5 (or fewer) rows at full opacity
       for (const row of visible) {
@@ -525,22 +610,212 @@
     return tr;
   }
 
-  function buildCkPriceRow(price) {
+  // ── Card group header: art thumb + name + watch star + CK ref + trend ────
+  function buildGroupHeader(cardName, groupRows) {
     const tr = document.createElement("tr");
-    tr.className = "ck-price-row";
+    tr.className = "group-row";
 
-    const usd = Number(price.priceUsd || 0).toLocaleString("en-US", { style: "currency", currency: "USD" });
-    const edition = price.edition ? ` · ${esc(price.edition)}` : "";
-    const foil = price.isFoil ? " · Foil" : "";
-    const asOf = price.asOf ? ` · as of ${esc(price.asOf)}` : "";
-    const link = price.url
-      ? ` · <a href="${esc(price.url)}" target="_blank" rel="noopener" class="listing-link">View listing</a>`
+    const art = lastArt[cardName];
+    const ck = lastCkPrices[cardName];
+    const hist = (lastHistory[cardName] || {}).points || [];
+    const watchedTarget = watchedMap[cardName.toLowerCase()];
+
+    // Thumbnail — lazy-loaded art crop straight from Scryfall's CDN; hover
+    // shows the full card via the floating #cardPreview element.
+    const thumbHtml = art && (art.art_crop || art.normal)
+      ? `<img class="card-thumb" loading="lazy" src="${esc(art.art_crop || art.normal)}" alt="${esc(cardName)}">`
       : "";
 
-    tr.innerHTML = `<td colspan="8" class="ck-price-cell">
-      <span class="ck-price-badge">Card Kingdom (US)</span>from <strong>${usd}</strong>${edition}${foil}${asOf}${link}
+    // Card Kingdom reference — same content the old dedicated CK row carried.
+    let ckHtml = "";
+    if (ck) {
+      const usd = Number(ck.priceUsd || 0).toLocaleString("en-US", { style: "currency", currency: "USD" });
+      const edition = ck.edition ? ` · ${esc(ck.edition)}` : "";
+      const foil = ck.isFoil ? " · Foil" : "";
+      const link = ck.url
+        ? ` · <a href="${esc(ck.url)}" target="_blank" rel="noopener" class="listing-link">view</a>`
+        : "";
+      ckHtml = `<span class="ck-price-cell"><span class="ck-price-badge">CK (US)</span>from <strong>${usd}</strong>${edition}${foil}${link}</span>`;
+    }
+
+    tr.innerHTML = `<td colspan="8">
+      <div class="group-head">
+        ${thumbHtml}
+        <span class="group-name">${esc(cardName)}</span>
+        <button class="watch-btn${watchedTarget != null ? " watched" : ""}"
+          title="${watchedTarget != null
+            ? `Watching — email alert under SGD ${Number(watchedTarget).toFixed(2)} (click to remove)`
+            : "Watch this card — email me when it dips under a target price"}">
+          ${watchedTarget != null ? "★" : "☆"}
+        </button>
+        ${ckHtml}
+        ${trendHtml(hist)}
+      </div>
     </td>`;
+
+    const thumb = tr.querySelector(".card-thumb");
+    if (thumb) wireCardPreview(thumb, art.normal || art.art_crop);
+    tr.querySelector(".watch-btn").onclick = () => toggleWatch(cardName, groupRows);
     return tr;
+  }
+
+  // Trend fragment: sparkline of daily best price + delta vs last snapshot.
+  function trendHtml(points) {
+    if (!points.length) return "";
+    if (points.length === 1) {
+      return `<span class="trend-wrap" title="Price history builds up as you search">
+        📈 first snapshot — trend builds as you search</span>`;
+    }
+    const [prevDay, prevPrice] = points[points.length - 2];
+    const [, curPrice] = points[points.length - 1];
+    const diff = curPrice - prevPrice;
+    const cls = diff > 0.004 ? "trend-up" : diff < -0.004 ? "trend-down" : "trend-flat";
+    const arrow = diff > 0.004 ? "▲" : diff < -0.004 ? "▼" : "＝";
+    const deltaText = cls === "trend-flat"
+      ? `unchanged since ${esc(prevDay)}`
+      : `${arrow} SGD ${Math.abs(diff).toFixed(2)} since ${esc(prevDay)}`;
+    return `<span class="trend-wrap" title="Best price across stores, per day you searched">
+      ${sparklineSvg(points)} <span class="${cls}">${deltaText}</span></span>`;
+  }
+
+  function sparklineSvg(points, w = 90, h = 22) {
+    const prices = points.map(p => p[1]);
+    const min = Math.min(...prices), max = Math.max(...prices);
+    const span = (max - min) || 1;
+    const step = points.length > 1 ? w / (points.length - 1) : 0;
+    const coords = prices.map((p, i) =>
+      `${(i * step).toFixed(1)},${(h - 3 - ((p - min) / span) * (h - 6)).toFixed(1)}`);
+    const last = coords[coords.length - 1].split(",");
+    return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+      <polyline points="${coords.join(" ")}" fill="none" stroke="#818cf8" stroke-width="1.5"/>
+      <circle cx="${last[0]}" cy="${last[1]}" r="2.4" fill="#c084fc"/>
+    </svg>`;
+  }
+
+  // ── Floating full-card preview ────────────────────────────────────────────
+  function wireCardPreview(el, fullUrl) {
+    const box = document.getElementById("cardPreview");
+    const img = box.querySelector("img");
+    const move = (e) => {
+      const pw = 250, ph = 349; // normal-size card aspect
+      let x = e.clientX + 18, y = e.clientY - ph / 2;
+      if (x + pw > window.innerWidth - 8) x = e.clientX - pw - 18;
+      y = Math.max(8, Math.min(y, window.innerHeight - ph - 8));
+      box.style.left = x + "px";
+      box.style.top = y + "px";
+    };
+    el.addEventListener("mouseenter", (e) => {
+      img.src = fullUrl;
+      box.style.display = "block";
+      move(e);
+    });
+    el.addEventListener("mousemove", move);
+    el.addEventListener("mouseleave", () => { box.style.display = "none"; img.src = ""; });
+  }
+
+  // ── Watchlist ─────────────────────────────────────────────────────────────
+  async function toggleWatch(cardName, groupRows) {
+    const key = cardName.toLowerCase();
+    try {
+      if (watchedMap[key] != null) {
+        if (!confirm(`Stop watching "${cardName}"?`)) return;
+        await fetch("/api/watchlist/" + encodeURIComponent(cardName), { method: "DELETE" });
+        delete watchedMap[key];
+      } else {
+        // Default target: 10% under tonight's best price, if we have one.
+        const prices = (groupRows || []).filter(r => !r.is_error && r.price_val > 0).map(r => r.price_val);
+        const suggested = prices.length ? (Math.min(...prices) * 0.9).toFixed(2) : "";
+        const raw = prompt(`Email me when "${cardName}" drops to or under (SGD):`, suggested);
+        if (raw == null) return;
+        const target = parseFloat(raw);
+        if (!(target > 0)) { alert("Enter a positive price."); return; }
+        const resp = await fetch("/api/watchlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ card: cardName, target_sgd: target }),
+        });
+        if (!resp.ok) throw new Error((await resp.json()).error || "save failed");
+        watchedMap[key] = target;
+      }
+      renderResults(lastResults, lastCkPrices); // re-render stars
+      refreshWatchlist();
+    } catch (err) {
+      alert("Watchlist update failed: " + err.message);
+    }
+  }
+
+  async function refreshWatchlist() {
+    try {
+      const entries = await (await fetch("/api/watchlist")).json();
+      watchedMap = {};
+      entries.forEach(e => { watchedMap[e.card.toLowerCase()] = e.target_sgd; });
+      const panel = document.getElementById("watchlistPanel");
+      const chips = document.getElementById("watchChips");
+      if (!entries.length) { panel.classList.add("d-none"); chips.innerHTML = ""; return; }
+      chips.innerHTML = entries.map(e => `
+        <span class="watch-chip">★ ${esc(e.card)}
+          <span class="wc-target">≤ SGD ${Number(e.target_sgd).toFixed(2)}</span>
+          <button title="Remove watch" data-card="${esc(e.card)}">✕</button>
+        </span>`).join("");
+      chips.querySelectorAll("button").forEach(btn => {
+        btn.onclick = async () => {
+          await fetch("/api/watchlist/" + encodeURIComponent(btn.dataset.card), { method: "DELETE" });
+          delete watchedMap[btn.dataset.card.toLowerCase()];
+          if (lastResults.length) renderResults(lastResults, lastCkPrices);
+          refreshWatchlist();
+        };
+      });
+      panel.classList.remove("d-none");
+    } catch { /* watch panel is a nicety — never an error */ }
+  }
+
+  // ── Saved buy lists ───────────────────────────────────────────────────────
+  async function refreshSavedLists(selectName) {
+    try {
+      const lists = await (await fetch("/api/buylists")).json();
+      const sel = document.getElementById("savedListSelect");
+      const names = Object.keys(lists).sort();
+      sel.innerHTML = `<option value="">Saved lists…</option>` +
+        names.map(n => `<option value="${esc(n)}">${esc(n)} (${lists[n].cards.length})</option>`).join("");
+      sel.dataset.lists = JSON.stringify(lists);
+      if (selectName && names.includes(selectName)) sel.value = selectName;
+    } catch { /* dropdown just stays empty */ }
+  }
+
+  function loadSavedList() {
+    const sel = document.getElementById("savedListSelect");
+    if (!sel.value) return;
+    const lists = JSON.parse(sel.dataset.lists || "{}");
+    const entry = lists[sel.value];
+    if (entry) document.getElementById("cardInput").value = entry.cards.join("\n");
+  }
+
+  async function saveCurrentList() {
+    const cards = document.getElementById("cardInput").value
+      .split("\n").map(s => s.trim()).filter(Boolean);
+    if (!cards.length) { alert("Nothing to save — the buy list is empty."); return; }
+    const sel = document.getElementById("savedListSelect");
+    const name = prompt("Save buy list as:", sel.value || "");
+    if (!name || !name.trim()) return;
+    try {
+      const resp = await fetch("/api/buylists", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), cards }),
+      });
+      if (!resp.ok) throw new Error((await resp.json()).error || "save failed");
+      await refreshSavedLists(name.trim());
+    } catch (err) {
+      alert("Save failed: " + err.message);
+    }
+  }
+
+  async function deleteSavedList() {
+    const sel = document.getElementById("savedListSelect");
+    if (!sel.value) { alert("Select a saved list first."); return; }
+    if (!confirm(`Delete saved list "${sel.value}"?`)) return;
+    await fetch("/api/buylists/" + encodeURIComponent(sel.value), { method: "DELETE" });
+    await refreshSavedLists();
   }
 
   // ── Store errors modal ────────────────────────────────────────────────────
@@ -589,13 +864,37 @@
     document.getElementById("downloadBtn").classList.add("d-none");
     document.getElementById("search-summary").classList.add("d-none");
     document.getElementById("error-msg").classList.add("d-none");
+    document.getElementById("prefill-notice").classList.add("d-none");
     lastResults = []; storeErrorDetails = []; lastCkPrices = {};
+    lastArt = {}; lastHistory = {};
   }
 
   // Ctrl+Enter to search (Cmd+Enter on macOS too)
   document.getElementById("cardInput").addEventListener("keydown", e => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runSearch(); }
   });
+
+  // ── Page-load init ────────────────────────────────────────────────────────
+  // #list=<newline-separated names> — how the Atelier's "Price on 3vor Fetch"
+  // button hands a whole deck over (fragment, so no URL-length worries and
+  // nothing hits the server log). Prefills the buy list; search stays manual
+  // because a 100-card sweep is something you fire deliberately.
+  (function initFromHash() {
+    if (!location.hash.startsWith("#list=")) return;
+    try {
+      const cards = decodeURIComponent(location.hash.slice(6))
+        .split("\n").map(s => s.trim()).filter(Boolean);
+      if (!cards.length) return;
+      document.getElementById("cardInput").value = cards.join("\n");
+      const note = document.getElementById("prefill-notice");
+      note.textContent = `📥 Loaded ${cards.length} cards from the Atelier — hit Search when ready.`;
+      note.classList.remove("d-none");
+      history.replaceState(null, "", location.pathname); // don't re-prefill on reload
+    } catch { /* malformed hash — just start empty */ }
+  })();
+
+  refreshWatchlist();
+  refreshSavedLists();
 
   // ── Per-line card-name autocomplete ─────────────────────────────────────────
   // The buy list is a multi-line textarea, so autocomplete operates on the line

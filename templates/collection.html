@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>3vor Fetch — Collection</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    * { font-family: 'Inter', sans-serif; }
+    body {
+      background: linear-gradient(135deg, #0a0c14 0%, #0f1117 50%, #0d1020 100%);
+      min-height: 100vh; color: #e2e8f0;
+    }
+    .hero-title {
+      font-size: 2rem; font-weight: 700;
+      background: linear-gradient(90deg, #c084fc, #818cf8);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    a.back-link { color: #64748b; font-size: 0.85rem; text-decoration: none; }
+    a.back-link:hover { color: #818cf8; }
+
+    .card-panel {
+      background: linear-gradient(145deg, #1a1d27, #161822);
+      border: 1px solid #2d3148; border-radius: 16px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+    .btn-primary-x {
+      background: linear-gradient(135deg, #7c3aed, #6d28d9); color: white;
+      border: none; border-radius: 10px; padding: 9px 20px; font-weight: 600; transition: all .2s;
+    }
+    .btn-primary-x:hover { background: linear-gradient(135deg, #6d28d9, #5b21b6); color: white; }
+    .btn-primary-x:disabled { opacity: 0.55; }
+    .btn-mini {
+      background: #1f2937; color: #9ca3af; border: 1px solid #374151;
+      border-radius: 10px; padding: 9px 14px; font-size: 0.85rem; transition: all .2s;
+    }
+    .btn-mini:hover { background: #374151; color: #e2e8f0; }
+    .btn-danger-x {
+      background: #1f0f0f; color: #f87171; border: 1px solid #7f1d1d;
+      border-radius: 10px; padding: 9px 14px; font-size: 0.85rem;
+    }
+    .btn-danger-x:hover { background: #2d1010; color: #fca5a5; }
+
+    .stat-badge {
+      background: #1a1d27; border: 1px solid #2d3148; border-radius: 10px;
+      padding: 10px 18px; font-size: 0.82rem; color: #64748b;
+    }
+    .stat-badge strong { color: #c084fc; font-size: 1.05rem; }
+    .stat-badge.value strong { color: #4ade80; }
+
+    .progress-wrap { background: #0f1117; border: 1px solid #2d3148; border-radius: 8px; height: 10px; overflow: hidden; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, #7c3aed, #c084fc); transition: width .6s; }
+
+    input.filter-box, select.filter-sel {
+      background: #0f1117; color: #cbd5e1; border: 1px solid #374151;
+      border-radius: 10px; padding: 8px 12px; font-size: 0.85rem;
+    }
+    input.filter-box:focus, select.filter-sel:focus { outline: none; border-color: #7c3aed; }
+
+    .results-table { background: #0f1117; border-radius: 12px; overflow: hidden; border: 1px solid #2d3148; }
+    .results-table thead th {
+      background: linear-gradient(135deg, #1a1d27, #1e2130); color: #c084fc;
+      font-weight: 600; font-size: 0.78rem; text-transform: uppercase;
+      letter-spacing: .05em; border-color: #2d3148 !important; padding: 12px 12px; white-space: nowrap;
+    }
+    .results-table td {
+      border-color: #1f2333 !important; color: #cbd5e1; padding: 9px 12px;
+      vertical-align: middle; background: transparent !important; font-size: 0.86rem;
+    }
+    .results-table tbody tr:hover { background-color: #1a1d27 !important; }
+    .col-name { color: #e2e8f0; font-weight: 600; }
+    .col-set  { color: #818cf8; font-size: 0.8rem; white-space: nowrap; }
+    .col-price { color: #4ade80 !important; font-weight: 700; white-space: nowrap; }
+    .col-ck { color: #d1a35c !important; white-space: nowrap; font-size: 0.82rem; }
+    .col-ck a { color: #f0b862; text-decoration: none; }
+    .col-ck a:hover { color: #fbd38a; text-decoration: underline; }
+    .col-muted { color: #64748b; font-size: 0.8rem; }
+    .listing-link { color: #60a5fa; text-decoration: none; }
+    .listing-link:hover { color: #93c5fd; text-decoration: underline; }
+
+    .tier-badge {
+      display: inline-block; font-size: 0.7rem; font-weight: 700; letter-spacing: .03em;
+      padding: 2px 9px; border-radius: 10px; text-transform: uppercase; white-space: nowrap;
+    }
+    .tier-exact { background: #052e1b; color: #4ade80; border: 1px solid #14532d; }
+    .tier-set   { background: #2d2306; color: #facc15; border: 1px solid #574a12; }
+    .tier-any   { background: #1a1d27; color: #94a3b8; border: 1px solid #374151; }
+    .tier-none  { background: #1f0f0f; color: #f87171; border: 1px solid #7f1d1d; }
+    .foil-badge {
+      display: inline-block; background: linear-gradient(135deg, #4c1d95, #6d28d9);
+      color: #ddd6fe; font-size: 0.7rem; font-weight: 600; padding: 1px 7px; border-radius: 10px;
+    }
+    .notice { background: #10151f; border: 1px solid #2d3148; border-radius: 10px;
+              color: #818cf8; font-size: 0.82rem; padding: 8px 14px; }
+    .warn-box { background: #2d2306; border: 1px solid #574a12; border-radius: 10px;
+                color: #facc15; font-size: 0.82rem; padding: 8px 14px; }
+    .error-box { background: #1f0f0f; border: 1px solid #7f1d1d; border-radius: 10px;
+                 color: #f87171; padding: 10px 14px; font-size: 0.85rem; }
+    .pager-btn { background: none; border: 1px solid #2d3148; border-radius: 8px; color: #64748b;
+                 font-size: 0.8rem; padding: 4px 12px; }
+    .pager-btn:hover:not(:disabled) { border-color: #818cf8; color: #818cf8; }
+    .pager-btn:disabled { opacity: .4; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0f1117; }
+    ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+  </style>
+</head>
+<body>
+<div class="container py-4" style="max-width: 1240px;">
+
+  <div class="d-flex align-items-center gap-3 mb-4">
+    <div style="font-size:2rem;">📦</div>
+    <div>
+      <h1 class="hero-title mb-0">Collection</h1>
+      <a class="back-link" href="/">← back to buy-list search</a>
+    </div>
+    <span class="ms-auto"></span>
+    <div class="stat-badge">🃏 <strong id="stat-items">0</strong> items</div>
+    <div class="stat-badge">🏷 <strong id="stat-priced">0</strong> priced</div>
+    <div class="stat-badge value">💰 <strong id="stat-value">SGD 0.00</strong></div>
+  </div>
+
+  <!-- Controls -->
+  <div class="card-panel p-4 mb-4">
+    <div class="d-flex gap-2 flex-wrap align-items-center">
+      <input type="file" id="csvFile" accept=".csv,text/csv" class="d-none" onchange="importCsv(this.files[0])">
+      <button class="btn btn-primary-x" onclick="document.getElementById('csvFile').click()">📥 Import Moxfield CSV</button>
+      <button class="btn btn-primary-x" id="pricerBtn" onclick="togglePricer()">▶ Price collection</button>
+      <button class="btn btn-mini d-none" id="stopBtn" onclick="pricerAction('stop')">■ Stop</button>
+      <a class="btn btn-mini" href="/api/collection/export" title="Download the whole collection with prices as xlsx">⬇ Export xlsx</a>
+      <span class="ms-auto"></span>
+      <button class="btn btn-danger-x" onclick="clearCollection()">🗑 Clear collection</button>
+    </div>
+
+    <div id="import-notice" class="notice mt-3 d-none"></div>
+    <div id="index-warning" class="warn-box mt-3 d-none">
+      ⚠ Print-identity index not built yet — run <code>make ck-refresh</code> once.
+      Until then everything prices at the “any print” tier.
+    </div>
+    <div id="error-box" class="error-box mt-3 d-none"></div>
+
+    <!-- Pricer progress -->
+    <div id="pricer-progress" class="mt-3 d-none">
+      <div class="d-flex justify-content-between mb-1" style="font-size:0.8rem; color:#94a3b8;">
+        <span id="progress-label">pricing…</span>
+        <span id="progress-count"></span>
+      </div>
+      <div class="progress-wrap"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+      <div class="mt-1" style="font-size:0.75rem; color:#4b5563;" id="progress-current"></div>
+    </div>
+  </div>
+
+  <!-- Filters -->
+  <div class="d-flex gap-2 flex-wrap align-items-center mb-3">
+    <input class="filter-box" id="filterText" placeholder="Filter by card name…" oninput="debouncedReload()">
+    <select class="filter-sel" id="filterTier" onchange="state.offset = 0; loadItems()">
+      <option value="">All tiers</option>
+      <option value="exact">✅ Exact print</option>
+      <option value="set">🟡 Same set</option>
+      <option value="any">⚪ Any print</option>
+      <option value="none">❌ No stock</option>
+      <option value="unpriced">Not priced yet</option>
+    </select>
+    <span class="ms-auto" style="color:#4b5563; font-size:0.78rem;" id="tier-summary"></span>
+  </div>
+
+  <!-- Table -->
+  <div class="table-responsive results-table">
+    <table class="table table-borderless mb-0">
+      <thead><tr>
+        <th style="min-width:200px;">Card</th>
+        <th>Set</th><th>#</th><th>Foil</th><th>Cond</th><th>Qty</th>
+        <th>Match</th>
+        <th style="min-width:170px;">Cheapest listing</th>
+        <th>Unit</th><th>Total</th>
+        <th title="Card Kingdom (US) reference price for this exact print, foil-aware">CK (US)</th>
+      </tr></thead>
+      <tbody id="itemsBody">
+        <tr><td colspan="11" style="color:#64748b; text-align:center; padding:32px;">
+          Import your Moxfield collection CSV to get started
+          (Moxfield → Collection → Export → CSV).</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="d-flex gap-2 align-items-center justify-content-center mt-3 mb-5">
+    <button class="pager-btn" id="prevBtn" onclick="page(-1)">← Prev</button>
+    <span style="color:#64748b; font-size:0.8rem;" id="pageInfo"></span>
+    <button class="pager-btn" id="nextBtn" onclick="page(1)">Next →</button>
+  </div>
+
+</div>
+
+<script>
+  const PAGE = 100;
+  const state = { offset: 0, total: 0, pollTimer: null };
+  const TIER_LABEL = { exact: "✅ exact", set: "🟡 same set", any: "⚪ any print", none: "❌ no stock" };
+
+  function esc(s) {
+    if (s == null) return "";
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+  function showError(msg) {
+    const el = document.getElementById("error-box");
+    el.textContent = "❌ " + msg;
+    el.classList.remove("d-none");
+    setTimeout(() => el.classList.add("d-none"), 8000);
+  }
+
+  // ── Import / clear ────────────────────────────────────────────────────────
+  async function importCsv(file) {
+    if (!file) return;
+    if (!confirm(`Import "${file.name}"? This replaces the current collection.`)) {
+      document.getElementById("csvFile").value = ""; return;
+    }
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      const resp = await fetch("/api/collection/import", { method: "POST", body: form });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "import failed");
+      const note = document.getElementById("import-notice");
+      note.textContent = `📥 Imported ${data.imported} items (${data.unique_names} unique cards)` +
+        (data.skipped ? ` — ${data.skipped} rows skipped` : "") +
+        `. Hit “Price collection” to start fetching SG prices.`;
+      note.classList.remove("d-none");
+      state.offset = 0;
+      await refreshStatus(); await loadItems();
+    } catch (err) { showError(err.message); }
+    document.getElementById("csvFile").value = "";
+  }
+
+  async function clearCollection() {
+    if (!confirm("Delete the whole collection (items and prices)?")) return;
+    await fetch("/api/collection", { method: "DELETE" });
+    state.offset = 0;
+    document.getElementById("import-notice").classList.add("d-none");
+    await refreshStatus(); await loadItems();
+  }
+
+  // ── Pricer ────────────────────────────────────────────────────────────────
+  async function pricerAction(action) {
+    const resp = await fetch("/api/collection/pricer", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
+    renderStatus(await resp.json());
+  }
+  function togglePricer() {
+    const btn = document.getElementById("pricerBtn");
+    pricerAction(btn.dataset.running === "1" ? "pause" : "start");
+  }
+
+  // ── Status ────────────────────────────────────────────────────────────────
+  async function refreshStatus() {
+    try { renderStatus(await (await fetch("/api/collection/status")).json()); }
+    catch { /* app briefly busy — next poll catches up */ }
+  }
+
+  function renderStatus(st) {
+    document.getElementById("stat-items").textContent = st.items;
+    document.getElementById("stat-priced").textContent = st.priced;
+    document.getElementById("stat-value").textContent =
+      "SGD " + Number(st.total_sgd || 0).toLocaleString("en-SG", { minimumFractionDigits: 2 });
+    document.getElementById("index-warning").classList.toggle("d-none", !!st.index_ready);
+
+    const t = st.tiers || {};
+    document.getElementById("tier-summary").textContent =
+      `✅ ${t.exact || 0} exact · 🟡 ${t.set || 0} set · ⚪ ${t.any || 0} any · ❌ ${t.none || 0} no stock`;
+
+    const p = st.pricer || {};
+    const running = p.state === "running" || p.state === "paused";
+    const btn = document.getElementById("pricerBtn");
+    btn.dataset.running = p.state === "running" ? "1" : "0";
+    btn.textContent = p.state === "running" ? "⏸ Pause" : (p.state === "paused" ? "▶ Resume" : "▶ Price collection");
+    document.getElementById("stopBtn").classList.toggle("d-none", !running);
+
+    const wrap = document.getElementById("pricer-progress");
+    wrap.classList.toggle("d-none", !running && p.state !== "done");
+    if (running || p.state === "done") {
+      const pct = p.total ? Math.round(100 * p.done / p.total) : 0;
+      document.getElementById("progress-fill").style.width = pct + "%";
+      document.getElementById("progress-label").textContent =
+        p.state === "done" ? "✓ pass complete" : (p.state === "paused" ? "paused" : "pricing…");
+      document.getElementById("progress-count").textContent = `${p.done} / ${p.total} cards`;
+      document.getElementById("progress-current").textContent =
+        (p.state === "running" && p.current ? "current batch: " + p.current : "") +
+        (p.error ? "  ·  ⚠ " + p.error : "");
+    }
+
+    // poll + live-refresh the table while the worker runs
+    clearTimeout(state.pollTimer);
+    if (running) state.pollTimer = setTimeout(async () => { await refreshStatus(); await loadItems(); }, 4000);
+  }
+
+  // ── Items table ───────────────────────────────────────────────────────────
+  let debounceT = null;
+  function debouncedReload() {
+    clearTimeout(debounceT);
+    debounceT = setTimeout(() => { state.offset = 0; loadItems(); }, 250);
+  }
+  function page(dir) {
+    state.offset = Math.max(0, state.offset + dir * PAGE);
+    loadItems();
+  }
+
+  async function loadItems() {
+    const q = encodeURIComponent(document.getElementById("filterText").value.trim());
+    const tier = encodeURIComponent(document.getElementById("filterTier").value);
+    const resp = await fetch(`/api/collection/items?q=${q}&tier=${tier}&offset=${state.offset}`);
+    const data = await resp.json();
+    state.total = data.total;
+
+    const tbody = document.getElementById("itemsBody");
+    if (!data.items.length) {
+      tbody.innerHTML = `<tr><td colspan="11" style="color:#64748b; text-align:center; padding:32px;">
+        ${data.total === 0 && !q && !tier ? "Import your Moxfield collection CSV to get started (Moxfield → Collection → Export → CSV)." : "No items match this filter."}</td></tr>`;
+    } else {
+      tbody.innerHTML = data.items.map(it => {
+        const gapNote = it.foil_gap
+          ? `<div class="col-muted" style="font-size:0.7rem; margin-top:2px;">${it.foil ? "no foil in stock — nonfoil price shown" : "only foil in stock — foil price shown"}</div>`
+          : "";
+        const tierBadge = it.tier
+          ? `<span class="tier-badge tier-${esc(it.tier)}" title="${it.checked_at ? "checked " + esc(it.checked_at) : ""}">${TIER_LABEL[it.tier] || esc(it.tier)}</span>${gapNote}`
+          : `<span class="col-muted">—</span>`;
+        const listing = it.url
+          ? `<a class="listing-link" href="${esc(it.url)}" target="_blank" rel="noopener">${esc(it.listing || it.store)}</a>${it.store ? ` <span class="col-muted">· ${esc(it.store)}</span>` : ""}`
+          : `<span class="col-muted">${esc(it.listing || "")}</span>`;
+        const unit = it.price != null ? "SGD " + it.price.toFixed(2) : "—";
+        const total = it.price != null ? "SGD " + (it.price * it.count).toFixed(2) : "—";
+        const ckText = it.ck_usd != null ? "$" + it.ck_usd.toFixed(2) : "—";
+        const ck = it.ck_url
+          ? `<a href="${esc(it.ck_url)}" target="_blank" rel="noopener" title="Card Kingdom, this exact print${it.foil ? " (foil)" : ""}">${ckText}</a>`
+          : ckText;
+        return `<tr>
+          <td class="col-name">${esc(it.name)}</td>
+          <td class="col-set">${esc(it.set_code)}</td>
+          <td class="col-muted">${esc(it.collector_number)}</td>
+          <td>${it.foil ? `<span class="foil-badge">✦ ${esc(it.foil)}</span>` : ""}</td>
+          <td class="col-muted">${esc(it.condition)}</td>
+          <td class="col-muted">×${it.count}</td>
+          <td>${tierBadge}</td>
+          <td>${it.tier === "none" ? '<span class="col-muted">out of stock everywhere</span>' : listing}</td>
+          <td class="col-price">${unit}</td>
+          <td class="col-price">${total}</td>
+          <td class="col-ck">${ck}</td>
+        </tr>`;
+      }).join("");
+    }
+
+    const from = data.total ? state.offset + 1 : 0;
+    const to = Math.min(state.offset + PAGE, data.total);
+    document.getElementById("pageInfo").textContent = `${from}–${to} of ${data.total}`;
+    document.getElementById("prevBtn").disabled = state.offset === 0;
+    document.getElementById("nextBtn").disabled = to >= data.total;
+  }
+
+  refreshStatus();
+  loadItems();
+</script>
+</body>
+</html>

@@ -34,6 +34,14 @@ port 5003) — the home screen warns when it isn't.
   mana curve, priciest inclusions, Moxfield .txt / .xlsx downloads.
 - **Gallery** — every past commission. Pre-Atelier decks are backfilled by
   parsing their xlsx once (cached as `*_deck.json` next to the workbook).
+- **Match rehearsal** — choose 2–4 saved decks for a bounded first circuit of
+  turns. The narrator receives seeded opening hands/draws, the editable
+  `deck_engine/prompts/commander_match_guide.md`, a compact local index of
+  official Comprehensive Rules sections, and exact Oracle text from the local
+  Scryfall cache. The full rules TXT is fetched on demand into ignored state,
+  so it never bloats the guidebook or repository. Every returned turn must
+  cite one of those sources; citations are checked exactly and the whole
+  rehearsal is held for review if any cannot be verified.
 - **Guild rules (3d)** — purse sliders (deck budget display-only, per-card
   cap, crucible cap), bracket, nightly bell, per-stage model tiers, courier
   emails. Persists to `deck_engine/state/ui_settings.json`, which

@@ -220,6 +220,35 @@ def _track_tool_use(event: dict, tools_used: set[str]) -> None:
         pass
 
 
+def _track_stream_stats(event: dict, stats: dict) -> None:
+    """Splits a call's output into its three components — visible narration
+    text, extended thinking, and structured output — so spend_log can say
+    WHERE output tokens went, not just how many there were (2026-07-10: the
+    narration-vs-thinking attribution question was unanswerable from
+    output_tokens alone). Chars, not tokens, for the text streams (deltas
+    don't carry token counts); thinking_est_tokens comes from the redacted
+    stream's own running estimated_tokens counter, so for sonnet/opus it IS
+    a token figure."""
+    try:
+        if event.get("type") != "stream_event":
+            return
+        inner = event.get("event", {})
+        if inner.get("type") != "content_block_delta":
+            return
+        delta = inner.get("delta", {})
+        dtype = delta.get("type")
+        if dtype == "text_delta":
+            stats["narration_chars"] += len(delta.get("text", ""))
+        elif dtype == "thinking_delta":
+            stats["thinking_chars"] += len(delta.get("thinking", ""))
+            est = delta.get("estimated_tokens")
+            if est:
+                # A running counter, not an increment — keep the latest (max).
+                stats["thinking_est_tokens"] = max(stats["thinking_est_tokens"], int(est))
+    except Exception:  # noqa: BLE001 — diagnostics must never be the reason a real call fails
+        pass
+
+
 def run(
     prompt: str,
     *,
@@ -304,9 +333,17 @@ def run(
 
     # Extended thinking: the CLI reads MAX_THINKING_TOKENS from its environment
     # (no dedicated flag) — set it per-subprocess so nothing leaks into the
-    # parent process or any other tool this app shells out to. 0 = off.
-    thinking_budget = int(getattr(config, "THINKING_BUDGET_TOKENS", 0) or 0)
-    env = {**os.environ, "MAX_THINKING_TOKENS": str(thinking_budget)} if thinking_budget > 0 else None
+    # parent process or any other tool this app shells out to. Budget is
+    # per-model (config.THINKING_BUDGET_BY_MODEL): sonnet/opus default 0 —
+    # their thinking is redacted on the wire, so it billed as output tokens
+    # while showing only a ticking counter next to the narration the prompts
+    # already demand. ALWAYS exported, "0" included: the old
+    # `env=None when budget == 0` path inherited the parent environment, so a
+    # configured 0 deferred to the CLI's own default instead of reliably
+    # disabling thinking.
+    budgets = getattr(config, "THINKING_BUDGET_BY_MODEL", None) or {}
+    thinking_budget = int(budgets.get(model, getattr(config, "THINKING_BUDGET_TOKENS", 0) or 0))
+    env = {**os.environ, "MAX_THINKING_TOKENS": str(max(0, thinking_budget))}
 
     try:
         proc = subprocess.Popen(
@@ -346,6 +383,7 @@ def run(
     timed_out = False
     final_envelope: dict | None = None
     tools_used: set[str] = set()
+    stream_stats = {"narration_chars": 0, "thinking_chars": 0, "thinking_est_tokens": 0}
     try:
         assert proc.stdout is not None
         for line in proc.stdout:
@@ -360,6 +398,7 @@ def run(
                 final_envelope = event
                 continue
             _track_tool_use(event, tools_used)
+            _track_stream_stats(event, stream_stats)
             if handle is not None:
                 _feed_view(handle, event)
         try:
@@ -422,6 +461,14 @@ def run(
             # access — see module docstring. Empty list on every call unless the
             # model actually reached for something beyond StructuredOutput.
             tools_used=result.tools_used,
+            # Output-token attribution (2026-07-10): narration vs thinking vs
+            # structured output, so per-stage diet changes are measurable from
+            # the log instead of inferred. See _track_stream_stats.
+            narration_chars=stream_stats["narration_chars"],
+            thinking_chars=stream_stats["thinking_chars"],
+            thinking_est_tokens=stream_stats["thinking_est_tokens"],
+            structured_chars=len(json.dumps(final_envelope.get("structured_output")))
+            if final_envelope.get("structured_output") is not None else 0,
         )
 
     if result.is_error:

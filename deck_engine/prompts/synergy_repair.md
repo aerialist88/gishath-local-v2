@@ -22,10 +22,12 @@ support like removal/draw the deck still needs) — this is a targeted tightenin
 wholesale rebuild. Not every generic card needs replacing; use judgement on how many swaps
 actually improve the deck without gutting its functional shell.
 
-Return the complete, corrected $deck_size_minus_1-card decklist. Respond only via the provided
-JSON schema — a flat list of exactly $deck_size_minus_1 card name strings. Before calling the
-structured-output tool, narrate your reasoning out loud — this streams live to whoever is watching
-the commission: which generic cards you're targeting and why, what you're bringing in instead and
-how it plays into the commander's mechanic. Write a few real paragraphs, not one line — but the
-actual card names for the full decklist belong only in the structured output, not repeated
-card-by-card in your narration.
+Respond only via the provided JSON schema: a `swaps` list of targeted changes, each with the
+exact printed name of the card to `remove` (as it appears in the decklist above), the exact
+printed name of the card to `add`, and a short `reason`. Do NOT return the rest of the
+decklist — only the swaps. Every card you don't name stays untouched.
+
+Before calling the structured-output tool, narrate briefly what you're tightening and why —
+this streams live to whoever is watching the commission. Keep it to one short paragraph,
+80 words at most: the theme of the changes, not a card-by-card walkthrough (the per-swap
+reasons already live in the structured output).

@@ -17,7 +17,7 @@ from flask import Flask, Response, jsonify, request, send_file, send_from_direct
 
 from deck_engine import config, run_log
 
-from . import archive, art, commanders, settings
+from . import archive, art, commanders, forge_engine, rules_reference, settings, simulator
 from .runner import MANAGER, RUNS_DIR
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -199,6 +199,82 @@ def card_art():
 def commander_search():
     query = request.args.get("q", "")
     return jsonify(commanders.search(query))
+
+
+# ── grounded match rehearsal ────────────────────────────────────────────────
+
+@app.route("/api/simulations", methods=["POST"])
+def start_simulation():
+    body = request.get_json(silent=True) or {}
+    deck_ids = body.get("deck_ids") or []
+    if not isinstance(deck_ids, list):
+        return jsonify({"error": "deck_ids must be a list"}), 400
+    try:
+        seed = body.get("seed")
+        session = simulator.MANAGER.start([str(deck_id) for deck_id in deck_ids], seed=seed)
+        return jsonify(session), 202
+    except (TypeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/simulations")
+def list_simulations():
+    return jsonify(simulator.MANAGER.list_sessions())
+
+
+@app.route("/api/simulations/<session_id>")
+def simulation_detail(session_id: str):
+    session = simulator.MANAGER.get(session_id)
+    if session is None:
+        return jsonify({"error": "rehearsal not found"}), 404
+    return jsonify(session)
+
+
+def _simulation_receipt(session_id: str, suffix: str, mimetype: str):
+    """Serve a per-game receipt file (Forge raw log / structured detail export).
+    The id is reduced to hex so a crafted id can't path-escape SIMULATION_DIR."""
+    clean = "".join(c for c in session_id if c in "0123456789abcdef")
+    path = simulator.SIMULATION_DIR / f"{clean}{suffix}"
+    if clean != session_id or not path.exists():
+        return jsonify({"error": "no engine receipt for that game"}), 404
+    return send_file(path, mimetype=mimetype, as_attachment=True, download_name=path.name)
+
+
+@app.route("/api/simulations/<session_id>/details")
+def simulation_forge_details(session_id: str):
+    """The structured per-turn export: every parsed engine event, in order.
+    Games played before this export existed only saved the raw log — for
+    those, the export is rebuilt from that log on the fly."""
+    clean = "".join(c for c in session_id if c in "0123456789abcdef")
+    if clean == session_id and not (simulator.SIMULATION_DIR / f"{clean}.forge.details.json").exists():
+        log_path = simulator.SIMULATION_DIR / f"{clean}.forge.log"
+        session = simulator.MANAGER.get(clean)
+        if log_path.exists() and session is not None:
+            players = (session.get("grounding") or {}).get("players") or []
+            names = {p["seat"]: p.get("commander", f"Deck {p['seat']}") for p in players}
+            parsed = forge_engine.parse_log(log_path.read_text(), names)
+            return jsonify({"session_id": clean, "rebuilt_from_raw_log": True,
+                            "players": players, "winner": parsed["winner"],
+                            "mulligans": parsed["mulligans"], "kept_hands": parsed["kept_hands"],
+                            "commander_damage": parsed["commander_damage"],
+                            "casts_by_seat": parsed["casts_by_seat"],
+                            "unsupported_cards": parsed["unsupported_cards"], **parsed["detail"]})
+    return _simulation_receipt(session_id, ".forge.details.json", "application/json")
+
+
+@app.route("/api/simulations/<session_id>/forge-log")
+def simulation_forge_log(session_id: str):
+    """Forge's complete raw typed game log, verbatim."""
+    return _simulation_receipt(session_id, ".forge.log", "text/plain")
+
+
+@app.route("/api/rules", methods=["GET", "POST"])
+def comprehensive_rules():
+    """Status/explicit refresh for the local official-rules cache."""
+    try:
+        return jsonify(rules_reference.refresh() if request.method == "POST" else rules_reference.status())
+    except Exception as exc:  # noqa: BLE001 — download failures should be actionable, not an HTML 500 page
+        return jsonify({"error": str(exc)}), 502
 
 
 # ── guild rules ──────────────────────────────────────────────────────────────

@@ -235,6 +235,7 @@ async function route() {
     if (name === "live") await viewLive();
     else if (name === "deck" && arg) await viewDeck(arg);
     else if (name === "gallery") await viewGallery();
+    else if (name === "match") await viewMatch();
     else if (name === "rules") await viewRules();
     else await viewHome();
   } catch (err) {
@@ -1088,6 +1089,7 @@ async function viewDeck(id) {
         <div style="display:flex;gap:8px">
           ${deck.files && deck.files.moxfield_txt ? `<a class="btn-brass" href="/api/decks/${esc(id)}/file/txt">Moxfield .txt</a>` : ""}
           ${deck.files && deck.files.xlsx ? `<a class="btn-ghost" href="/api/decks/${esc(id)}/file/xlsx">.xlsx</a>` : ""}
+          ${priceDeckLink(deck)}
         </div>
       </div>
     </div>
@@ -1108,6 +1110,17 @@ async function viewDeck(id) {
   wireCardPreviews(body); // delegated — covers every tab's card names, wired once
   show("decklist");
   fillArt(VIEW);
+}
+
+/* "Price on 3vor Fetch" — hands the whole decklist to the pricing app
+   (port 5003) via a #list= URL fragment; its buy-list box prefills and the
+   user fires the search themselves. Fragment, not query string: a 100-card
+   list stays client-side with no length concerns. */
+function priceDeckLink(deck) {
+  const names = (deck.cards || []).map((c) => c.name).filter(Boolean);
+  if (!names.length) return "";
+  const url = "http://127.0.0.1:5003/#list=" + encodeURIComponent(names.join("\n"));
+  return `<a class="btn-ghost" href="${esc(url)}" target="_blank" rel="noopener" title="Open 3vor Fetch with this decklist prefilled">Price on 3vor Fetch</a>`;
 }
 
 function groupByRole(cards) {
@@ -1217,6 +1230,177 @@ function statsTab(deck) {
   </div>`;
 }
 
+/* ── match rehearsal ────────────────────────────────────────────────────── */
+
+async function viewMatch() {
+  const [decks, ruleStatus] = await Promise.all([api("/api/decks"), api("/api/rules")]);
+  HEAD_SUB.textContent = "grounded Commander playtest";
+  HEAD_RIGHT.innerHTML = "";
+  const cards = decks.map((d, i) => `<label class="match-deck ${i < 4 ? "selected" : ""}">
+    <input type="checkbox" value="${esc(d.id)}" ${i < 4 ? "checked" : ""}>
+    <div class="art-ph" data-art="${esc(d.commander)}"><span>art</span></div>
+    <span><b>${esc(d.commander)}</b><small>${esc(d.archetype || "Saved commission")}</small></span>
+  </label>`).join("");
+  VIEW.innerHTML = `<div class="page match-page">
+    <div class="match-hero">
+      <div><div class="caps-lg">Commander match simulation</div>
+        <h1>Play the decks against each other, to a winner.</h1>
+        <p>Choose 2–4 finished commissions. The game is played on the <b>Forge rules engine</b> — real zones, real priority, real combat, an AI that plays to win — and each deck gets an honest performance report at the end. (Falls back to the LLM referee if Forge isn't installed.)</p>
+      </div>
+      <aside class="plaque-dark"><div class="caps" style="color:var(--plaque-text)">Engine truth</div>
+        <p>Hands, libraries, and the battlefield are engine data structures, not narration — nothing can be hallucinated. The full typed game log is kept as receipts beside each session.</p>
+      </aside>
+    </div>
+    ${decks.length >= 2 ? `<section class="match-panel">
+      <div class="match-panel-head"><div><div class="caps">Seats at the table</div><h2>Choose your pod</h2></div><span id="match-count" class="pill">${Math.min(decks.length, 4)} selected</span></div>
+      <div class="match-decks">${cards}</div>
+      <div class="match-actions"><label class="seed-field">Replay seed <input id="match-seed" inputmode="numeric" placeholder="Random"></label><button class="btn-brass" id="btn-run-match">Play the match</button></div>
+      <p class="match-note">Played to an actual winner — the deck reports at the end are how the Atelier grades its own builds. Genuinely ambiguous rules moments are resolved reasonably and logged as judgement calls.</p>
+    </section>` : `<div class="empty-note">Forge at least two decks before staging a rehearsal.</div>`}
+    <section class="guide-card"><div class="caps">Source documents</div><div><b>Commander Match Simulation Guide</b><span>deck_engine/prompts/commander_match_guide.md</span></div><div><b>Card Oracle text</b><span>Local Scryfall bulk cache — exact text is bundled only for the selected decks.</span></div><div><b>Magic Comprehensive Rules</b><span>${ruleStatus.available ? `local indexed copy · effective ${esc(ruleStatus.effective_date || "date unavailable")}` : "not cached yet"}</span><button class="rule-refresh" id="btn-refresh-rules">${ruleStatus.available ? "Refresh official rules" : "Download official rules"}</button></div></section>
+    <div id="match-result"></div>
+    <section id="match-history"></section>
+  </div>`;
+  fillArt(VIEW);
+  const checks = [...VIEW.querySelectorAll(".match-deck input")];
+  const updateCount = () => {
+    const count = checks.filter((input) => input.checked).length;
+    $("#match-count").textContent = `${count} selected`;
+    checks.forEach((input) => input.closest(".match-deck").classList.toggle("selected", input.checked));
+  };
+  checks.forEach((input) => input.onchange = () => {
+    if (checks.filter((item) => item.checked).length > 4) { input.checked = false; toast("A Commander pod has at most four seats here."); }
+    updateCount();
+  });
+  const run = $("#btn-run-match");
+  const refreshRules = $("#btn-refresh-rules");
+  if (refreshRules) refreshRules.onclick = async () => {
+    refreshRules.disabled = true; refreshRules.textContent = "Refreshing…";
+    try { await api("/api/rules", { method: "POST" }); await viewMatch(); }
+    catch (err) { refreshRules.disabled = false; refreshRules.textContent = "Refresh official rules"; toast(err.message); }
+  };
+  if (run) run.onclick = async () => {
+    const deckIds = checks.filter((input) => input.checked).map((input) => input.value);
+    const rawSeed = $("#match-seed").value.trim();
+    if (deckIds.length < 2) { toast("Choose at least two decks."); return; }
+    if (rawSeed && !/^\d+$/.test(rawSeed)) { toast("Use a whole-number seed, or leave it blank."); return; }
+    run.disabled = true;
+    run.textContent = "Dealing the hands…";
+    try {
+      const session = await api("/api/simulations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ deck_ids: deckIds, seed: rawSeed || null }) });
+      watchSimulation(session.id, run);
+    } catch (err) { run.disabled = false; run.textContent = "Play the match"; toast(err.message); }
+  };
+  loadMatchHistory();
+}
+
+/* The rehearsal ledger — every past game, reopenable. Sessions persist as
+   state/simulations/<id>.json on the deck_engine side, so the ledger survives
+   server restarts; before this existed a result was only visible in the
+   moments after its run finished. */
+async function loadMatchHistory() {
+  const rootEl = $("#match-history");
+  if (!rootEl) return;
+  let sessions = [];
+  try { sessions = await api("/api/simulations"); } catch { return; } // ledger is decoration — never block the match page on it
+  sessions = sessions.filter((s) => s.status !== "running");
+  if (!sessions.length) { rootEl.innerHTML = ""; return; }
+  rootEl.innerHTML = `<section class="match-panel" style="margin-top:26px">
+    <div class="match-panel-head"><div><div class="caps">The rehearsal ledger</div><h2>Past games</h2></div><span class="pill">${sessions.length} on record</span></div>
+    <div>${sessions.map((s) => `
+      <button class="history-row" data-sim="${esc(s.id)}" style="display:flex;gap:14px;align-items:baseline;width:100%;text-align:left;background:none;border:0;border-top:1px solid rgba(120,90,30,.15);padding:10px 4px;cursor:pointer;font:inherit">
+        <span class="mono" style="font-size:11px;color:var(--ink3);white-space:nowrap">${esc((s.created_utc || "").slice(0, 16).replace("T", " "))}</span>
+        <b style="flex:1">${(s.commanders || []).map(esc).join(" · ")}</b>
+        <span class="mono" style="font-size:11px;color:var(--ink3);white-space:nowrap">${s.seed != null ? "seed " + esc(s.seed) : "Forge engine"}</span>
+        <span class="pill">${s.status === "complete" ? "verified" : "held"}</span>
+      </button>`).join("")}</div>
+  </section>`;
+  rootEl.querySelectorAll(".history-row").forEach((row) => row.onclick = async () => {
+    const resultEl = $("#match-result");
+    try {
+      const session = await api("/api/simulations/" + encodeURIComponent(row.dataset.sim));
+      if (session.status === "failed") {
+        resultEl.innerHTML = `<div class="match-error"><b>Rehearsal held for review.</b><span>${esc(session.error || "The evidence ledger could not be verified.")}</span></div>`;
+      } else renderSimulation(resultEl, session);
+      resultEl.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (err) { toast(err.message); }
+  });
+}
+
+async function watchSimulation(id, button) {
+  const resultEl = $("#match-result");
+  resultEl.innerHTML = `<div class="match-running"><span class="pulse">Playing the game to a finish…</span><small>Forge engine games take about a minute (JVM boot + the whole game); the LLM fallback takes a few.</small></div>`;
+  const poll = async () => {
+    try {
+      const session = await api("/api/simulations/" + encodeURIComponent(id));
+      if (session.status === "running") { setTimeout(poll, 1500); return; }
+      button.disabled = false; button.textContent = "Play another match";
+      if (session.status === "failed") {
+        resultEl.innerHTML = `<div class="match-error"><b>Rehearsal held for review.</b><span>${esc(session.error || "The evidence ledger could not be verified.")}</span></div>`;
+      } else renderSimulation(resultEl, session);
+      loadMatchHistory(); // the just-finished game joins the ledger immediately
+    } catch (err) { button.disabled = false; button.textContent = "Play the match"; resultEl.innerHTML = `<div class="match-error">${esc(err.message)}</div>`; }
+  };
+  poll();
+}
+
+function renderSimulation(root, session) {
+  const g = session.grounding || {}, result = session.result || {};
+  // Pre-2026-07-10 sessions used the bounded-rehearsal shape (narration +
+  // state per turn, no winner) — map them onto the game-log fields so old
+  // ledger entries stay readable.
+  const turns = (result.turns || []).map((t) => t.play != null ? t
+    : { ...t, play: t.narration || "", life: (t.state || {}).life || [] });
+  const seat = (n) => (g.players || []).find((p) => p.seat === n) || {};
+  const winner = result.winner || {};
+  // Every card name that appeared in this game becomes hoverable — same
+  // floating art preview the deck views use (wireCardPreviews below). Names
+  // are collected from engine facts only: cards played, commanders, key cards.
+  const hoverNames = new Set();
+  (g.players || []).forEach((p) => p.commander && hoverNames.add(p.commander));
+  turns.forEach((t) => (t.cards_played || []).forEach((n) => n && hoverNames.add(n)));
+  (result.deck_reports || []).forEach((r) => (r.key_cards || []).forEach((n) => n && hoverNames.add(n)));
+  const escapedNames = [...hoverNames].map(esc).sort((a, b) => b.length - a.length)
+    .map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const nameRe = escapedNames.length ? new RegExp("(" + escapedNames.join("|") + ")", "g") : null;
+  const markCards = (txt) => {
+    // "Seat N" -> "Player N" at display time, so sessions recorded before the
+    // 2026-07-10 rename read consistently with new ones.
+    const safe = esc(String(txt ?? "").replace(/\bSeat (\d)\b/g, "Player $1"));
+    return nameRe ? safe.replace(nameRe, '<span class="card-name" data-card="$1">$1</span>') : safe;
+  };
+  const champ = seat(winner.seat);
+  const rowStyle = "display:flex;gap:12px;align-items:baseline;padding:7px 4px;border-top:1px solid rgba(120,90,30,.14);font-size:13.5px";
+  const engineLabel = g.engine === "forge" ? "Forge rules engine · real game" : "LLM referee · seed " + esc(g.seed);
+  root.innerHTML = `<section class="simulation-result">
+    <div class="result-head"><div><div class="caps">Simulated game · ${engineLabel}</div>
+      <h2>${champ.commander ? esc(champ.commander) + " takes the table" : "Game complete"}</h2>
+      <p>${winner.method ? markCards(winner.method) + (winner.turn ? " — turn " + esc(winner.turn) : "") : markCards(result.opening_note || "")}</p></div>
+      <span class="seal-badge">${g.engine === "forge" ? "Engine-tracked zones" : "Decklists verified"}</span></div>
+    <div class="source-strip">${(g.players || []).map((p) => `<span>Player ${esc(p.seat)}: ${esc(p.commander)} · ${(p.cards || {}).mulligans || 0} mulligan${(p.cards || {}).mulligans === 1 ? "" : "s"}${(p.cards || {}).kept_hand ? ` · kept ${esc(p.cards.kept_hand)}` : ""}</span>`).join("")}${g.rules_effective_date ? `<span>CR effective ${esc(g.rules_effective_date)}</span>` : ""}</div>
+    ${g.engine === "forge" && session.id ? `<p class="match-note" style="margin-top:8px">Receipts: <a href="/api/simulations/${esc(session.id)}/details">per-turn detail (JSON)</a> · <a href="/api/simulations/${esc(session.id)}/forge-log">raw Forge log</a></p>` : ""}
+    ${result.opening_note && winner.method ? `<p class="match-note">${markCards(result.opening_note)}</p>` : ""}
+    <div style="margin-top:14px">
+      <div class="caps" style="margin-bottom:6px">The game, turn by turn</div>
+      ${turns.map((t) => `<div style="${rowStyle}">
+        <span class="mono" style="font-size:11px;color:var(--ink3);min-width:30px">T${esc(t.turn)}</span>
+        <b style="min-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc((seat(t.seat).commander || "Player " + t.seat).split(",")[0])}</b>
+        <span style="flex:1">${markCards(t.play)}</span>
+        <span class="mono" style="font-size:11px;color:var(--ink3);white-space:nowrap">${(t.life || []).map(esc).join(" · ")}</span>
+      </div>`).join("")}
+    </div>
+    <div class="snapshot"><div class="caps">Deck reports — how each build performed</div>
+      ${(result.deck_reports || []).map((r) => { const p = seat(r.seat); return `<div style="margin-top:12px">
+        <b>Player ${esc(r.seat)} — ${esc(p.commander || "")}${winner.seat === r.seat ? " 🏆" : ""}</b>
+        <p style="margin:4px 0 0">${markCards(r.verdict)}</p>
+        ${(r.key_cards || []).length ? `<small style="color:var(--ink3)">Key cards: ${r.key_cards.map((c) => `<span class="card-name" data-card="${esc(c)}">${esc(c)}</span>`).join(", ")}</small>` : ""}
+      </div>`; }).join("")}
+      ${(result.unresolved_questions || []).length ? `<div class="unresolved" style="margin-top:14px"><b>Judgement calls made along the way</b><ul>${result.unresolved_questions.map((item) => `<li>${markCards(item)}</li>`).join("")}</ul></div>` : ""}
+    </div>
+  </section>`;
+  wireCardPreviews(root); // hover any card name in the log or reports for its real art
+}
+
 /* ── gallery ────────────────────────────────────────────────────────────── */
 
 async function viewGallery() {
@@ -1251,6 +1435,7 @@ async function viewRules() {
     ["validate_repair", "Validate + repair", "code-level checks, LLM mends"],
     ["optimize", "Optimize", "swap-delta passes"],
     ["card_tagger", "Card tagger", "roles + phases for the sheets"],
+    ["simulate", "Match rehearsal", "grounded early-game playtest"],
   ];
   const state = JSON.parse(JSON.stringify(s));
 

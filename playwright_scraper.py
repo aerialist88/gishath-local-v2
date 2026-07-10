@@ -37,6 +37,7 @@ import json
 import logging
 import re
 import threading
+import time
 import urllib.parse
 from dataclasses import dataclass, field
 from typing import Optional
@@ -181,6 +182,50 @@ _browser_lock: Optional[asyncio.Lock] = None  # guards relaunch — created lazi
 PAGE_TIMEOUT = 20_000   # ms — per-page navigation timeout
 WAIT_SELECTOR_TIMEOUT = 5_000  # ms — wait for results selector (shorter = faster failure on no-results pages)
 GOTO_ATTEMPTS = 2       # total attempts (1 retry) for page.goto on transient timeouts
+
+# ── Per-store circuit breaker (Playwright path) ───────────────────────────────
+# A store having a bad day (2026-07-09: Agora Hobby timing out every goto)
+# would otherwise burn PAGE_TIMEOUT × GOTO_ATTEMPTS for EVERY remaining card,
+# guaranteeing the whole path blows app.py's wall-clock budget. After
+# _BREAKER_THRESHOLD consecutive exhausted-goto failures the store is skipped
+# for _BREAKER_COOLDOWN_S; one success resets the count. State is only touched
+# from the single Playwright event loop, so no locking is needed.
+_BREAKER_THRESHOLD = 3
+_BREAKER_COOLDOWN_S = 600.0
+_breaker: dict[str, dict] = {}   # store name -> {"fails": int, "open_until": float}
+
+
+class StoreCircuitOpen(RuntimeError):
+    """Raised instead of scraping while a store's breaker is open."""
+
+
+def _breaker_state(store_name: str) -> dict:
+    return _breaker.setdefault(store_name, {"fails": 0, "open_until": 0.0})
+
+
+def _breaker_check(store: StoreConfig) -> None:
+    remaining = _breaker_state(store.name)["open_until"] - time.monotonic()
+    if remaining > 0:
+        raise StoreCircuitOpen(
+            f"skipped — repeated page timeouts, backing off (auto-retries in ~{max(1, round(remaining / 60))}m)"
+        )
+
+
+def _breaker_record_timeout(store: StoreConfig) -> None:
+    state = _breaker_state(store.name)
+    state["fails"] += 1
+    if state["fails"] >= _BREAKER_THRESHOLD:
+        state["open_until"] = time.monotonic() + _BREAKER_COOLDOWN_S
+        state["fails"] = 0
+        log.warning(
+            "[%s] circuit breaker OPEN after %d consecutive goto timeouts — "
+            "skipping this store for %.0f minutes",
+            store.name, _BREAKER_THRESHOLD, _BREAKER_COOLDOWN_S / 60,
+        )
+
+
+def _breaker_record_success(store: StoreConfig) -> None:
+    _breaker_state(store.name)["fails"] = 0
 
 
 def start_browser() -> None:
@@ -399,10 +444,14 @@ _JS_VARIANT2 = r"""
             const available = v.Available || v.available;
             if (!available) return;
 
+            // Schema price is INTEGER CENTS (Shopify money). The old ">500 means
+            // cents" guess silently passed every card under $5.00 through as
+            // dollars — a $2.00 card showed as $200. Integer = cents, always;
+            // a decimal-formatted value is already dollars.
             const rawPrice = v.Price ?? v.price ?? 0;
             const price    = typeof rawPrice === 'number'
-                ? (rawPrice > 500 ? rawPrice / 100 : rawPrice)   // cents if >500, else assume dollars
-                : parseFloat(rawPrice) || 0;
+                ? (Number.isInteger(rawPrice) ? rawPrice / 100 : rawPrice)
+                : (/^\d+$/.test(String(rawPrice).trim()) ? parseInt(rawPrice, 10) / 100 : parseFloat(rawPrice) || 0);
             if (!price) return;
 
             const title   = v.Title || v.title || '';
@@ -438,8 +487,10 @@ _JS_VARIANT3 = r"""
             const qty   = parseInt(chip.getAttribute('data-variantqty') || '0', 10);
             if (avail === 'false' || qty <= 0) return;
 
-            const rawPrice = parseFloat(chip.getAttribute('data-variantprice') || '0');
-            const price    = rawPrice > 500 ? rawPrice / 100 : rawPrice;   // cents → dollars
+            // data-variantprice is INTEGER CENTS (see _JS_VARIANT2's note) —
+            // integer means cents regardless of magnitude; decimals are dollars.
+            const rawStr   = (chip.getAttribute('data-variantprice') || '0').trim();
+            const price    = /^\d+$/.test(rawStr) ? parseInt(rawStr, 10) / 100 : (parseFloat(rawStr) || 0);
             if (!price) return;
 
             const quality = (chip.getAttribute('data-varianttitle') || chip.innerText || '').trim();
@@ -587,14 +638,24 @@ def _parse_bs_variant2(soup: BeautifulSoup, store: StoreConfig) -> list[dict]:
             available = v.get("Available") or v.get("available")
             if not available:
                 continue
+            # Schema price is INTEGER CENTS (Shopify money). The old ">500 means
+            # cents" guess passed every card under $5.00 through as dollars —
+            # a $2.00 card showed as SGD 200. Integral value = cents, always;
+            # a decimal-formatted value is already dollars.
             raw_price = v.get("Price") or v.get("price") or 0
-            if isinstance(raw_price, (int, float)):
-                price = raw_price / 100 if raw_price > 500 else float(raw_price)
+            if isinstance(raw_price, bool):
+                price = 0.0
+            elif isinstance(raw_price, (int, float)):
+                price = raw_price / 100 if float(raw_price).is_integer() else float(raw_price)
             else:
-                try:
-                    price = float(raw_price)
-                except (TypeError, ValueError):
-                    price = 0.0
+                s = str(raw_price).strip()
+                if re.fullmatch(r"\d+", s):
+                    price = int(s) / 100
+                else:
+                    try:
+                        price = float(s)
+                    except (TypeError, ValueError):
+                        price = 0.0
             if not price:
                 continue
             title = v.get("Title") or v.get("title") or ""
@@ -624,11 +685,15 @@ def _parse_bs_variant3(soup: BeautifulSoup, store: StoreConfig) -> list[dict]:
             qty = int(chip.get("data-variantqty") or "0")
             if qty <= 0:
                 continue
-            try:
-                raw_price = float(chip.get("data-variantprice") or "0")
-            except (TypeError, ValueError):
-                continue
-            price = raw_price / 100 if raw_price > 500 else raw_price
+            # data-variantprice is INTEGER CENTS — same rule as _parse_bs_variant2.
+            raw_str = str(chip.get("data-variantprice") or "0").strip()
+            if re.fullmatch(r"\d+", raw_str):
+                price = int(raw_str) / 100
+            else:
+                try:
+                    price = float(raw_str)
+                except (TypeError, ValueError):
+                    continue
             if not price:
                 continue
             quality = (chip.get("data-varianttitle") or chip.get_text(strip=True))
@@ -792,6 +857,7 @@ async def _scrape_with_playwright(store: StoreConfig, card_name: str) -> list[di
     giving up — a selector-not-found after a successful goto is NOT retried,
     since that's a genuine empty/CF/structure-change result, not a fluke.
     """
+    _breaker_check(store)  # store having a bad day? skip instantly, not in 40s
     await _ensure_browser_healthy()
 
     url = store.search_url(card_name)
@@ -814,6 +880,7 @@ async def _scrape_with_playwright(store: StoreConfig, card_name: str) -> list[di
                 )
                 try:
                     await page.goto(url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+                    _breaker_record_success(store)
                 except PlaywrightTimeoutError as exc:
                     if attempt < GOTO_ATTEMPTS:
                         log.warning(
@@ -822,6 +889,7 @@ async def _scrape_with_playwright(store: StoreConfig, card_name: str) -> list[di
                         )
                         continue
                     log.warning("[%s] Playwright error scraping '%s': %s", store.name, card_name, exc)
+                    _breaker_record_timeout(store)  # retries exhausted — counts toward tripping
                     raise
 
                 # Wait for at least one relevant element to appear (or timeout silently)
@@ -903,6 +971,9 @@ async def _search_one_store(store: StoreConfig, card_name: str) -> tuple[list[di
     try:
         cards = await _scrape_store_for_card(store, card_name)
         return cards, None
+    except StoreCircuitOpen as exc:
+        # Not a scrape failure — a deliberate skip; keep the message clean.
+        return [], {"store": store.name, "error": str(exc)}
     except Exception as exc:
         err = {"store": store.name, "error": f"Playwright scrape failed: {exc}"}
         return [], err
@@ -912,14 +983,15 @@ async def _search_card_all_stores(card_name: str, on_store_result=None) -> dict:
     """Search all BinderPOS stores for a single card concurrently.
 
     If on_store_result is given, it is invoked as on_store_result(card_name,
-    cards, err) the moment each store finishes — letting a caller collect
-    completed work incrementally so a wall-clock deadline elsewhere can abandon
-    this coroutine without discarding the stores that already succeeded.
+    store_name, cards, err) the moment each store finishes — letting a caller
+    collect completed work incrementally so a wall-clock deadline elsewhere can
+    abandon this coroutine without discarding the stores that already succeeded
+    (and report exactly which stores were still running when it did).
     """
     async def _one(store: StoreConfig) -> tuple[list[dict], dict | None]:
         cards, err = await _search_one_store(store, card_name)
         if on_store_result is not None:
-            on_store_result(card_name, cards, err)
+            on_store_result(card_name, store.name, cards, err)
         return cards, err
 
     results = await asyncio.gather(*(_one(store) for store in BINDERPOS_STORES))
@@ -1055,6 +1127,7 @@ async def search_many_playwright(
     card_names: list[str],
     sink: dict[str, dict] | None = None,
     sink_lock: "threading.Lock | None" = None,
+    progress: dict[str, int] | None = None,
 ) -> dict[str, dict]:
     """Search all BinderPOS stores for multiple cards concurrently.
 
@@ -1074,15 +1147,23 @@ async def search_many_playwright(
     losing the entire BinderPOS path. sink is mutated from this event loop's
     thread and read from the Flask thread; pass sink_lock to make each side's
     snapshot consistent.
+
+    If progress is provided, it accumulates {store_name: completed card count}
+    under the same lock — the caller can tell exactly which stores were still
+    running when a deadline fired (for an honest timeout message) instead of
+    blaming the whole path.
     """
-    def _publish(card_name: str, cards: list[dict], err: dict | None) -> None:
-        if sink is None:
+    def _publish(card_name: str, store_name: str, cards: list[dict], err: dict | None) -> None:
+        if sink is None and progress is None:
             return
         with (sink_lock if sink_lock is not None else contextlib.nullcontext()):
-            slot = sink.setdefault(card_name, {"cards": [], "errors": []})
-            slot["cards"].extend(cards)
-            if err:
-                slot["errors"].append(err)
+            if sink is not None:
+                slot = sink.setdefault(card_name, {"cards": [], "errors": []})
+                slot["cards"].extend(cards)
+                if err:
+                    slot["errors"].append(err)
+            if progress is not None:
+                progress[store_name] = progress.get(store_name, 0) + 1
 
     tasks = {
         name: _search_card_all_stores(name, on_store_result=_publish)

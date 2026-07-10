@@ -1,7 +1,7 @@
 # Gishath Fetch v2 — Makefile
 # Run all commands from the gishath-local-v2/ directory.
 
-.PHONY: engine-build run sync-engine clean install-playwright atelier atelier-web ck-refresh help
+.PHONY: engine-build run sync-engine clean install-playwright atelier atelier-web gallery gallery-preview gallery-deploy ck-refresh watchlist-check help
 
 GO          = /usr/local/go/bin/go
 ENGINE_SRC  = engine-src/api
@@ -14,8 +14,12 @@ help:
 	@echo "  make run                Start the Flask app (engine + Playwright auto-start)"
 	@echo "  make atelier            The Deckwright's Atelier — native desktop window"
 	@echo "  make atelier-web        The Atelier in the browser (http://127.0.0.1:5077)"
+	@echo "  make gallery            Bake the public read-only gallery → gallery_site/"
+	@echo "  make gallery-preview    Bake, then serve it locally (http://127.0.0.1:5099)"
+	@echo "  make gallery-deploy     Bake + push the gallery to GitHub Pages"
 	@echo "  make sync-engine        Pull upstream fixes into the engine fork"
 	@echo "  make ck-refresh         Refresh the Card Kingdom reference-price cache (MTGJSON)"
+	@echo "  make watchlist-check    Run the price-watch alert check now (also runs nightly)"
 	@echo "  make clean              Remove the built engine binary"
 	@echo ""
 
@@ -38,8 +42,20 @@ atelier:
 atelier-web:
 	. venv/bin/activate && python -m atelier.server
 
+gallery:
+	. venv/bin/activate && python -m atelier.publish
+
+gallery-preview: gallery
+	. venv/bin/activate && cd gallery_site && python -m http.server 5099
+
+gallery-deploy:
+	./publish_gallery.sh
+
 ck-refresh:
 	. venv/bin/activate && python refresh_ck_prices.py
+
+watchlist-check:
+	. venv/bin/activate && python check_watchlist.py
 
 sync-engine:
 	@echo "Fetching upstream changes..."

@@ -17,9 +17,12 @@ Architecture:
     • Both run concurrently per search and their results are merged before returning.
 
 Routes:
-    GET  /          — UI (templates/index.html)
-    POST /search    — JSON buy list → JSON results + store error summary
-    POST /download  — JSON rows → xlsx download
+    GET  /               — UI (templates/index.html)
+    POST /search         — JSON buy list → JSON results + store error summary
+                           (+ card art URLs, price history, watchlist state)
+    POST /download       — JSON rows → xlsx download
+    GET/POST/DELETE /api/watchlist — price-watch entries (alerts via check_watchlist.py)
+    GET/POST/DELETE /api/buylists  — named saved buy lists
 """
 from __future__ import annotations
 
@@ -40,8 +43,13 @@ from datetime import datetime
 import httpx
 from flask import Flask, jsonify, render_template, request, send_file
 
+import buy_lists
+import card_art
 import card_index
 import ck_price
+import collection
+import price_history
+import watchlist
 from engine_client import ENGINE_BASE, ENGINE_PORT, search_many
 from export.excel import write_excel
 from optimizer import compute_plan, rows_to_results
@@ -373,11 +381,16 @@ def search():
     # goes, so if it blows the wall-clock budget below we can still keep the
     # stores/cards that finished instead of discarding the whole path. pw_lock
     # guards the cross-thread read (Flask thread) vs writes (Playwright loop).
+    # pw_progress counts completed cards per store so a timeout can name the
+    # store(s) actually still running instead of blaming the whole path.
     pw_partial: dict[str, dict] = {}
+    pw_progress: dict[str, int] = {}
     pw_lock = threading.Lock()
 
     def _run_playwright():
-        return run_async(search_many_playwright(buy_list, sink=pw_partial, sink_lock=pw_lock))
+        return run_async(search_many_playwright(
+            buy_list, sink=pw_partial, sink_lock=pw_lock, progress=pw_progress,
+        ))
 
     engine_results: dict[str, dict] = {}
     playwright_results: dict[str, dict] = {}
@@ -409,14 +422,23 @@ def search():
                     name: {"cards": list(v["cards"]), "errors": list(v["errors"])}
                     for name, v in pw_partial.items()
                 }
+                progress_snapshot = dict(pw_progress)
             got = sum(1 for v in playwright_results.values() if v["cards"] or v["errors"])
+            # Name the store(s) actually still running at the deadline — eleven
+            # finished stores shouldn't share the blame for one slow one.
+            pending = [
+                f"{s.name} ({progress_snapshot.get(s.name, 0)}/{len(buy_list)} cards done)"
+                for s in BINDERPOS_STORES
+                if progress_snapshot.get(s.name, 0) < len(buy_list)
+            ]
+            pending_note = f"; still scraping: {', '.join(pending)}" if pending else ""
             log.error(
-                "Playwright search exceeded %.0fs budget — keeping partial results (%d/%d cards had data)",
-                SEARCH_BUDGET_SECONDS, got, len(buy_list),
+                "Playwright search exceeded %.0fs budget — keeping partial results (%d/%d cards had data)%s",
+                SEARCH_BUDGET_SECONDS, got, len(buy_list), pending_note,
             )
             soft_errors.append({
-                "store": "Playwright (BinderPOS)",
-                "error": f"timed out (>{SEARCH_BUDGET_SECONDS:.0f}s); kept partial results for {got}/{len(buy_list)} cards",
+                "store": pending[0].split(" (")[0] if len(pending) == 1 else "Playwright stores",
+                "error": f"search budget hit ({SEARCH_BUDGET_SECONDS:.0f}s); finished stores kept{pending_note}",
             })
         except Exception as exc:
             log.exception("Playwright search failed: %s", exc)
@@ -435,6 +457,16 @@ def search():
     elapsed = round(time.monotonic() - t0, 1)
     results_by_card = _merge_results(engine_results, playwright_results, buy_list)
     rows = format_results(results_by_card, buy_list)
+
+    # Local price history: snapshot today's cheapest per (card, store), then
+    # read back the trend for the UI. Both are local SQLite touches; either
+    # failing is logged inside price_history and never fails the search.
+    price_history.record(rows)
+    history = price_history.get_history(buy_list)
+
+    # Card images: name -> {art_crop, normal} Scryfall URLs from the shared
+    # local art index. Pure dict lookups; the browser lazy-loads the images.
+    art = card_art.get_for_names(buy_list)
 
     # Collect store errors across all cards, deduplicated by store name.
     seen_stores: set[str] = set()
@@ -459,7 +491,121 @@ def search():
         "store_errors": store_errors,
         "skipped":      skipped,
         "ck_prices":    ck_prices,
+        "card_art":     art,
+        "history":      history,
+        "watched":      {e["card"].lower(): e["target_sgd"] for e in watchlist.list_entries()},
     })
+
+
+# ── Collection ────────────────────────────────────────────────────────────────
+
+@app.route("/collection")
+def collection_page():
+    return render_template("collection.html")
+
+
+@app.route("/api/collection/import", methods=["POST"])
+def collection_import():
+    """Moxfield collection CSV — as an uploaded file or raw text body.
+    Replaces the current collection (the CSV is a full export anyway)."""
+    # Branch on mimetype BEFORE touching request.files/get_data — whichever
+    # accessor runs first drains the body stream, so probing request.files on
+    # a non-multipart request (e.g. curl's default form encoding) would leave
+    # get_data() empty.
+    if request.mimetype and request.mimetype.startswith("multipart/"):
+        upload = request.files.get("file")
+        text = upload.read().decode("utf-8-sig", errors="replace") if upload else ""
+    else:
+        text = request.get_data(as_text=True) or ""
+    try:
+        return jsonify(collection.import_csv(text))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/collection/items")
+def collection_items():
+    try:
+        offset = max(0, int(request.args.get("offset", 0)))
+    except ValueError:
+        offset = 0
+    return jsonify(collection.list_items(
+        query=request.args.get("q", "").strip(),
+        tier=request.args.get("tier", "").strip(),
+        offset=offset,
+    ))
+
+
+@app.route("/api/collection/status")
+def collection_status():
+    return jsonify(collection.status())
+
+
+@app.route("/api/collection/export")
+def collection_export():
+    xlsx_bytes = collection.export_xlsx()
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    return send_file(
+        io.BytesIO(xlsx_bytes),
+        as_attachment=True,
+        download_name=f"collection_{timestamp}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.route("/api/collection/pricer", methods=["POST"])
+def collection_pricer():
+    action = (request.get_json(force=True, silent=True) or {}).get("action", "")
+    if action == "start":
+        return jsonify(collection.start_pricer())
+    if action == "pause":
+        return jsonify(collection.pause_pricer())
+    if action == "stop":
+        return jsonify(collection.stop_pricer())
+    return jsonify({"error": f"unknown action {action!r}"}), 400
+
+
+@app.route("/api/collection", methods=["DELETE"])
+def collection_clear():
+    collection.stop_pricer()
+    collection.clear()
+    return jsonify({"ok": True})
+
+
+# ── Watchlist ─────────────────────────────────────────────────────────────────
+
+@app.route("/api/watchlist", methods=["GET", "POST"])
+def watchlist_route():
+    if request.method == "GET":
+        return jsonify(watchlist.list_entries())
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        return jsonify(watchlist.add(body.get("card", ""), body.get("target_sgd", 0)))
+    except (ValueError, TypeError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/watchlist/<path:card>", methods=["DELETE"])
+def watchlist_delete(card: str):
+    return jsonify(watchlist.remove(card))
+
+
+# ── Saved buy lists ───────────────────────────────────────────────────────────
+
+@app.route("/api/buylists", methods=["GET", "POST"])
+def buylists_route():
+    if request.method == "GET":
+        return jsonify(buy_lists.list_all())
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        return jsonify(buy_lists.save(body.get("name", ""), body.get("cards", [])))
+    except (ValueError, TypeError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/buylists/<path:name>", methods=["DELETE"])
+def buylists_delete(name: str):
+    return jsonify(buy_lists.delete(name))
 
 
 @app.route("/debug/stores")

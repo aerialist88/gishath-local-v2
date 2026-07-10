@@ -152,6 +152,22 @@ SWAP_JSON_SCHEMA_ITEM = {
     "required": ["remove", "add", "reason"],
 }
 
+# Synergy repair returns targeted swaps applied in code (_apply_swaps) — the
+# same T3 swap-delta principle optimize follows. Until 2026-07-10 this stage
+# regurgitated the complete decklist (DECKLIST_JSON_SCHEMA), which cost
+# near-draft output tokens per firing and contradicted the pipeline's own rule.
+SYNERGY_REPAIR_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "swaps": {
+            "type": "array",
+            "description": "Targeted replacements only — generic card out, on-mechanic card in.",
+            "items": SWAP_JSON_SCHEMA_ITEM,
+        },
+    },
+    "required": ["swaps"],
+}
+
 JUDGE_JSON_SCHEMA = {
     "type": "object",
     "properties": {
@@ -493,10 +509,15 @@ def _synergy_gate_and_repair(
         t0 = time.monotonic()
         result = claude_cli.run(
             prompt, run_id=run_id, stage=f"{stage_prefix}/synergy-repair-{attempt}",
-            model_tier_key="validate_repair", json_schema=DECKLIST_JSON_SCHEMA,
+            model_tier_key="validate_repair", json_schema=SYNERGY_REPAIR_JSON_SCHEMA,
             disallowed_tools=config.DISALLOWED_SEARCH_TOOLS,
         )
-        current = result.parsed_json().get("cards", [])
+        # T3 (2026-07-10): swap deltas applied in code, not a regurgitated full
+        # list. Malformed swaps are warnings, and the Scryfall repair loop below
+        # re-validates the applied result either way.
+        current, swap_warnings = _apply_swaps(current, result.parsed_json().get("swaps", []))
+        for warning in swap_warnings:
+            _log(f"{stage_prefix}: synergy repair {attempt} — {warning}")
         current, validation = _validate_and_repair(
             run_id, concept, current, cache,
             stage_prefix=f"{stage_prefix}/synergy-repair-{attempt}", max_attempts=2,
