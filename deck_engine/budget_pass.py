@@ -41,7 +41,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from . import claude_cli, config, prompt_helpers, pricing as pricing_mod, synergy_check
+from . import card_tagger, claude_cli, config, prompt_helpers, pricing as pricing_mod, scryfall_cache, synergy_check
 from .agent_pipeline import DeckResult, _apply_swaps, _validate_and_repair
 
 BUDGET_SWAP_JSON_SCHEMA = {
@@ -57,8 +57,10 @@ BUDGET_SWAP_JSON_SCHEMA = {
                     "remove": {"type": "string"},
                     "add": {"type": "string"},
                     "reason": {"type": "string"},
-                    "role": {"type": "string",
-                             "description": "functional role of the replacement, e.g. 'Ramp', 'Removal'"},
+                    # Enum, not free text: free-text roles fragmented the Stats
+                    # sheet's role counts (run 9e430ab7: "Land/Mana base (UG dual)").
+                    "role": {"type": "string", "enum": card_tagger.CANONICAL_ROLES,
+                             "description": "functional role of the replacement"},
                     "phase": {"type": "string", "enum": ["early", "mid", "late"]},
                 },
                 "required": ["remove", "add", "reason", "role", "phase"],
@@ -78,6 +80,12 @@ class BudgetOutcome:
     swaps_made: list[tuple] = field(default_factory=list)
     # (card, price) — still over cap after the attempt budget; shipped flagged
     over_budget: list[tuple] = field(default_factory=list)
+    # Cards with no usable price at all — the cap CANNOT be evaluated for these,
+    # so they ship un-checked (run 9e430ab7: a Bayou with a bogus SGD 0.45 match
+    # would now land here via the CK sanity check instead of sliding under the
+    # cap). Surfaced next to over_budget in the email/xlsx so a silently
+    # cap-exempt card is never invisible.
+    unpriced: list[str] = field(default_factory=list)
     synergy_note: str = ""           # non-empty if the post-swap synergy re-check dipped below threshold
     notes: list[str] = field(default_factory=list)   # swap-application warnings etc., for diagnostics
 
@@ -129,6 +137,10 @@ def _swap_call(run_id: str, deck: DeckResult, violations: list[tuple[str, float]
         mechanic_tokens=", ".join(deck.concept.mechanic_tokens) or "(none extracted)",
         max_card_price=f"{config.MAX_CARD_PRICE_SGD:.0f}",
         over_cap_block=over_cap_block,
+        # The model must see what's already in the deck: without this, run
+        # 9e430ab7's swaps added two duals the deck already ran, creating
+        # singleton violations a repair call then had to clean up.
+        current_decklist_block="\n".join(f"- {c}" for c in deck.cards),
     )
     result = claude_cli.run(
         prompt, run_id=run_id, stage=f"budget/swap-{attempt}",
@@ -155,6 +167,11 @@ def enforce_card_cap(
     outcome.ran = True
 
     cheapest = pricing_mod.cheapest_by_card(pricing)
+    # Names present when the pass started — anything on the final list that
+    # isn't in here entered DURING the pass (a repair-loop `add`, not a vetted
+    # swap) and needs its own re-price at the end, or it ships unpriced and
+    # silently cap-exempt (run 9e430ab7: Morphic Pool / Sunken Hollow).
+    entry_keys = {c.strip().lower() for c in deck.cards}
 
     # Commander first: can't be swapped post-build (see module docstring) — if it's
     # over cap despite the select-time check, it goes straight onto the flag list.
@@ -177,11 +194,32 @@ def enforce_card_cap(
 
         # Only over-cap cards may be removed — the model must never touch a
         # compliant card, whatever it returns (same trust-nothing posture as T3).
+        # And a proposed `add` that's already in the deck (or repeated within
+        # this same response) is vetoed here in code: applying it would create a
+        # singleton violation the repair loop then has to unwind (run 9e430ab7).
         violation_keys = {c.strip().lower() for c, _ in violations}
-        vetted = [s for s in proposed if str(s.get("remove", "")).strip().lower() in violation_keys]
-        skipped = len(proposed) - len(vetted)
-        if skipped:
-            outcome.notes.append(f"attempt {attempt}: ignored {skipped} swap(s) targeting non-violating cards")
+        deck_keys = {c.strip().lower() for c in deck.cards}
+        vetted = []
+        skipped_non_violating = 0
+        for s in proposed:
+            if str(s.get("remove", "")).strip().lower() not in violation_keys:
+                skipped_non_violating += 1
+                continue
+            add_name = str(s.get("add", "")).strip()
+            add_key = add_name.lower()
+            add_card = cache.get(add_key)
+            exempt = add_card is not None and scryfall_cache._is_singleton_exempt(add_card)  # noqa: SLF001 — same-package helper
+            if add_key in deck_keys and not exempt:
+                outcome.notes.append(
+                    f"attempt {attempt}: ignored swap adding {add_name!r} — already in the deck"
+                )
+                continue
+            deck_keys.add(add_key)
+            vetted.append(s)
+        if skipped_non_violating:
+            outcome.notes.append(
+                f"attempt {attempt}: ignored {skipped_non_violating} swap(s) targeting non-violating cards"
+            )
         if not vetted:
             outcome.notes.append(f"attempt {attempt}: model proposed no usable swaps")
             continue
@@ -233,9 +271,46 @@ def enforce_card_cap(
                 "role": str(s.get("role", "")).strip(), "phase": str(s.get("phase", "")).strip(),
             }
 
+    # Cards that entered during this pass via the repair loop (not vetted swaps,
+    # which were re-priced above) get one targeted re-price so they face the cap
+    # and show a price downstream instead of shipping unpriced.
+    pass_added_unpriced = [
+        c for c in deck.cards
+        if c.strip().lower() not in entry_keys and c.strip().lower() not in cheapest
+    ]
+    if pass_added_unpriced:
+        reprice = pricing_mod.fetch_prices(pass_added_unpriced)
+        repair_prices = pricing_mod.cheapest_by_card(reprice) if reprice.available else {}
+        for key, (price, store) in repair_prices.items():
+            pricing.extra_assignments.append((key, price, store))
+            cheapest[key] = (price, store)
+        pricing.ck_prices.update(reprice.ck_prices if reprice.available else {})
+        if repair_prices:
+            outcome.notes.append(
+                f"re-priced {len(repair_prices)} card(s) added by the repair loop during this pass"
+            )
+
     # Whatever's still over cap after the attempt budget ships FLAGGED (Trevor's
     # explicit call: never fail a run over a pricing rule).
     outcome.over_budget.extend(_violations(deck.cards, cheapest, cap))
+
+    # Cards the cap could not be evaluated for at all — no usable price (never
+    # scraped, no hits, or quarantined by the CK price-sanity check). Shipped
+    # un-checked, so they're surfaced next to over_budget rather than silent.
+    outcome.unpriced = [c for c in deck.cards if c.strip().lower() not in cheapest]
+    if outcome.unpriced:
+        outcome.notes.append(
+            f"per-card cap could not be evaluated for {len(outcome.unpriced)} unpriced card(s): "
+            + ", ".join(outcome.unpriced)
+        )
+
+    # Any card that entered the deck after tag_cards() ran (repair-loop adds;
+    # a vetted swap whose model response somehow lacked a tag) gets tagged now —
+    # heuristics first, one Haiku call only if something is left ambiguous.
+    try:
+        card_tagger.retag_untagged(run_id, deck.concept.commander, deck.cards, deck.card_tags, cache)
+    except Exception:  # noqa: BLE001 — tags are cosmetic; never fail the budget pass over them
+        pass
 
     # S3 synergy re-check — check-only, no repair loop here (see module docstring
     # for why: budget<->synergy repair ping-pong has no fixpoint).

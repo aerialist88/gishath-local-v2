@@ -14,6 +14,11 @@ The following cards exceed the per-card budget cap of SGD $max_card_price:
 
 $over_cap_block
 
+The current decklist, for reference — a replacement must NOT be a card that already appears
+here (it would break the singleton rule; basic lands are the only exception):
+
+$current_decklist_block
+
 Propose ONE replacement for EACH card listed above. Every replacement must:
 - Be a real Magic: The Gathering card (exact printed name), Commander-legal, within the
   commander's color identity, and not already in the deck

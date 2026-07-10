@@ -153,7 +153,8 @@ def _plain_budget_block(budget) -> str:
     """§3.4 budget-pass callout, plain-text. Deck content (not diagnostics) — friends
     see it too: 'this deck was made cheaper' is exactly what a newsletter reader wants
     to know. Empty string when the pass did nothing, so a clean run stays clean."""
-    if budget is None or (not budget.swaps_made and not budget.over_budget):
+    unpriced = list(getattr(budget, "unpriced", []) or []) if budget is not None else []
+    if budget is None or (not budget.swaps_made and not budget.over_budget and not unpriced):
         return ""
     lines = []
     if budget.swaps_made:
@@ -164,6 +165,11 @@ def _plain_budget_block(budget) -> str:
     if budget.over_budget:
         over = ", ".join(f"{c} (SGD {p:.2f})" for c, p in budget.over_budget)
         lines.append(f"OVER BUDGET, shipped flagged (no good substitute found): {over}")
+    if unpriced:
+        lines.append(
+            f"Cap not checked for {len(unpriced)} unpriced card(s) (no trustworthy price found): "
+            + ", ".join(unpriced)
+        )
     if budget.synergy_note:
         lines.append(budget.synergy_note)
     return "\n" + "\n".join(lines) + "\n"
@@ -225,7 +231,8 @@ def _html_budget_block(budget) -> str:
     """§3.4 budget-pass callout, HTML. Same visibility rule as the plain version:
     deck content, shown to friends too; invisible on a run where the pass did nothing."""
     e = _html.escape
-    if budget is None or (not budget.swaps_made and not budget.over_budget):
+    unpriced = list(getattr(budget, "unpriced", []) or []) if budget is not None else []
+    if budget is None or (not budget.swaps_made and not budget.over_budget and not unpriced):
         return ""
     swap_rows = ""
     if budget.swaps_made:
@@ -253,12 +260,21 @@ def _html_budget_block(budget) -> str:
       <strong>Over budget, shipped flagged:</strong> no good substitute found for {e(over)} —
       swap manually if the price matters.
     </div>"""
+    unpriced_block = ""
+    if unpriced:
+        unpriced_names = ", ".join(unpriced)
+        unpriced_block = f"""
+    <div style="margin-top:12px; padding:10px 14px; background:#FFFBEB; border:1px solid #FDE68A;
+                border-radius:8px; font-size:13px; color:#92400E; line-height:1.5;">
+      <strong>Cap not checked</strong> for {len(unpriced)} unpriced card(s) (no trustworthy price
+      found): {e(unpriced_names)}
+    </div>"""
     synergy_block = ""
     if budget.synergy_note:
         synergy_block = f"""
     <div style="margin-top:12px; padding:10px 14px; background:#FFFBEB; border:1px solid #FDE68A;
                 border-radius:8px; font-size:13px; color:#92400E; line-height:1.5;">{e(budget.synergy_note)}</div>"""
-    return swap_rows + over_block + synergy_block
+    return swap_rows + over_block + unpriced_block + synergy_block
 
 
 def _html_success_body(

@@ -46,6 +46,15 @@ class PricingOutcome:
     # benchmark shown alongside the SGD shopping price, same as the main
     # gishath fetch UI/export — no currency conversion, raw USD.
     ck_prices: dict[str, dict] = field(default_factory=dict)
+    # Price-sanity quarantine (2026-07-10, run 9e430ab7): a store hit whose SGD
+    # price is implausibly far under the CK reference is almost certainly a bad
+    # match (art card, proxy, wrong product) — a Bayou "priced" SGD 0.45 against
+    # a USD 229.99 CK reference understated the deck total AND slid under the
+    # per-card budget cap. These are treated as UNPRICED by cheapest_by_card()
+    # (excluded from totals/cap, counted in unpriced_count) but kept here so
+    # export/email can say what was quarantined and why.
+    # Keyed by lowercased name -> (sgd_price, store, ck_price_usd).
+    suspicious: dict[str, tuple[float, str, float]] = field(default_factory=dict)
 
 
 def cheapest_by_card(pricing: "PricingOutcome") -> dict[str, tuple[float, str]]:
@@ -57,7 +66,10 @@ def cheapest_by_card(pricing: "PricingOutcome") -> dict[str, tuple[float, str]]:
     result: dict[str, tuple[float, str]] = {}
     if pricing.available and pricing.plan is not None:
         for assignment in pricing.plan.strategy_a.all_assignments:
-            result[assignment.card.strip().lower()] = (assignment.price, assignment.store)
+            key = assignment.card.strip().lower()
+            if key in pricing.suspicious:
+                continue  # quarantined bad match — treat as unpriced, never as a real price
+            result[key] = (assignment.price, assignment.store)
     # Budget-pass re-prices overlay the original plan (§3.4) — applied last so a
     # swapped-in card's fresh price wins over any stale hit from the original scrape.
     for name_key, price, store in pricing.extra_assignments:
@@ -178,4 +190,25 @@ def fetch_prices(card_names: list[str]) -> PricingOutcome:
     except Exception as exc:  # noqa: BLE001 — pricing must never take down the whole run
         return PricingOutcome(plan=None, rows=rows, available=True, error=f"compute_plan() failed: {exc}", ck_prices=ck_prices)
 
-    return PricingOutcome(plan=plan, rows=rows, available=True, ck_prices=ck_prices)
+    return PricingOutcome(plan=plan, rows=rows, available=True, ck_prices=ck_prices,
+                          suspicious=_suspicious_prices(plan, ck_prices))
+
+
+def _suspicious_prices(plan, ck_prices: dict[str, dict]) -> dict[str, tuple[float, str, float]]:
+    """CK reference sanity check on the plan's cheapest assignments — see
+    PricingOutcome.suspicious. Only fires when the CK reference is substantial
+    (config.PRICE_SANITY_CK_MIN_USD) so bulk commons never trip it, and the
+    local price is under config.PRICE_SANITY_RATIO of the CK USD number —
+    conservative, since the SGD equivalent of a USD price is numerically
+    HIGHER, so a real discount has to be even deeper to hit the ratio."""
+    suspicious: dict[str, tuple[float, str, float]] = {}
+    try:
+        assignments = plan.strategy_a.all_assignments
+    except AttributeError:
+        return suspicious
+    for a in assignments:
+        key = a.card.strip().lower()
+        ck_usd = float((ck_prices.get(key) or {}).get("priceUsd") or 0.0)
+        if ck_usd >= config.PRICE_SANITY_CK_MIN_USD and a.price < config.PRICE_SANITY_RATIO * ck_usd:
+            suspicious[key] = (a.price, a.store, round(ck_usd, 2))
+    return suspicious

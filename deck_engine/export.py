@@ -253,6 +253,14 @@ def _budget_rows(budget) -> list[tuple[str, str]]:
             f"No suitable budget substitute was found for: {over}. Shipped anyway per the "
             "flag-never-block rule — swap these manually if the price matters.",
         ))
+    unpriced = list(getattr(budget, "unpriced", []) or [])
+    if unpriced:
+        rows.append((
+            "Cap not checked — unpriced",
+            f"No trustworthy price was found for {len(unpriced)} card(s), so the per-card cap "
+            f"could not be evaluated for them: {', '.join(unpriced)}. Check these manually if "
+            "the price matters.",
+        ))
     if budget.synergy_note:
         rows.append(("Synergy after budget swaps", budget.synergy_note))
     return rows
@@ -479,7 +487,15 @@ def deck_json_payload(
             "top_expensive": [[n, round(p, 2)] for n, p in price_summary["top_expensive"]],
             "per_card_cap_sgd": config.MAX_CARD_PRICE_SGD,
             "over_budget": [[c, round(p, 2)] for c, p in (budget.over_budget if budget else [])],
+            "cap_unpriced": list(getattr(budget, "unpriced", []) or []) if budget else [],
             "swaps_made": len(budget.swaps_made) if budget else 0,
+            # Bad store matches quarantined by the CK sanity check (pricing.py):
+            # [name, bogus_sgd_price, store, ck_reference_usd] — excluded from
+            # every total/cap above, kept here for the Atelier deck view/debug.
+            "suspicious_prices": [
+                [name, round(price, 2), store, ck_usd]
+                for name, (price, store, ck_usd) in sorted(pricing.suspicious.items())
+            ],
         },
         "gameplan": {
             "early": deck.early_game,

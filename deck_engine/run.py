@@ -26,6 +26,7 @@ from . import (
     export,
     live_view,
     pricing,
+    prose_check,
     run_log,
     scryfall_cache,
     spend_log,
@@ -133,6 +134,20 @@ def main(view=None, forced_commander: str | None = None, run_id: str | None = No
                 elif budget_outcome.over_budget:
                     _announce(f"[warn] budget pass: {len(budget_outcome.over_budget)} card(s) over "
                               f"SGD {budget_outcome.cap:.0f}, shipping flagged")
+
+                # Prose consistency: the gameplan text was written at optimize,
+                # but the deck kept changing after (synergy repair, budget pass)
+                # — and optimize itself can anchor on brief-named cards that were
+                # already cut. Code-scan for card names in the prose that aren't
+                # in the final deck; only if any exist, one cheap call rewrites
+                # the prose against the final list. Cosmetic — never fails a run.
+                try:
+                    stale = prose_check.ensure_prose_matches_deck(run_id, deck, cache)
+                    if stale:
+                        _announce(f"[run {run_id[:8]}] prose referenced {len(stale)} card(s) no longer "
+                                  f"in the deck ({', '.join(stale[:5])}) — rewrote gameplan text")
+                except Exception as exc:  # noqa: BLE001 — presentation fix, never a run failure
+                    _announce(f"[warn] prose-consistency pass failed: {exc}")
 
                 stage = "export"
                 _notify("set_stage", stage=stage)

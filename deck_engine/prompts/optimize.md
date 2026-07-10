@@ -75,6 +75,12 @@ Return:
 - early_game / mid_game / late_game: 1-3 sentences each describing what this deck is doing at
   that stage of a typical game
 
+In final_summary, changes_made and early_game/mid_game/late_game, name ONLY cards that actually
+appear in the decklist above (the commander is fine too). The build brief may reference cards
+that were cut before this pass ever ran — the decklist above is the sole authority on what is
+in the deck, and any card you name that isn't on it will reach Trevor as a description of a
+deck that doesn't exist.
+
 Respond only via the provided JSON schema. Before calling the structured-output tool, narrate your
 reasoning out loud — this streams live to whoever is watching the commission. Walk through your
 fact-check finding in full, then explain what you're swapping and why, and how the synergy-density

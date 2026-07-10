@@ -232,6 +232,12 @@ class ValidationResult:
     land_count: int = 0            # lands actually found in the decklist (cache type_line)
     min_lands: int = 0             # floor requested by the caller; 0 = land check not requested
     too_few_lands: bool = False
+    # Land count the repair MESSAGE aims at. The gate fires at min_lands (a
+    # tripwire a little under quota), but the message must name the real quota
+    # floor: run 9e430ab7 shipped 33 lands because the prompt said "at least 33"
+    # (the tripwire) and the model treated that floor as the target. 0 = message
+    # falls back to min_lands.
+    land_target: int = 0
 
     @property
     def is_valid(self) -> bool:
@@ -260,10 +266,11 @@ class ValidationResult:
         if self.singleton_violations:
             lines.append(f"- Singleton violation (duplicate, not exempt): {', '.join(self.singleton_violations)}")
         if self.too_few_lands:
+            target = max(self.land_target, self.min_lands)
             lines.append(
                 f"- Only {self.land_count} lands — the mana base has been damaged. Add basic lands "
                 f"in the commander's colors (cutting the weakest nonland cards) until the deck has "
-                f"at least {self.min_lands} lands."
+                f"at least {target} lands."
             )
         return "\n".join(lines)
 
@@ -277,7 +284,7 @@ def _is_singleton_exempt(card: dict) -> bool:
 
 
 def validate_deck(commander: str, decklist: list[str], cache: dict[str, dict] | None = None,
-                  min_lands: int = 0) -> ValidationResult:
+                  min_lands: int = 0, land_target: int = 0) -> ValidationResult:
     """Validate a 99-card decklist against `commander`.
 
     Args:
@@ -290,9 +297,12 @@ def validate_deck(commander: str, decklist: list[str], cache: dict[str, dict] | 
                    repair regurgitations ate a third of it), so callers should pass a floor a
                    little under the draft quota, not the quota itself — this is a tripwire for
                    catastrophic loss, not quota enforcement.
+        land_target: land count the repair message tells the model to reach (the real quota
+                   floor), so the tripwire never doubles as the target. 0 = use min_lands.
     """
     cache = cache if cache is not None else load_cache()
-    result = ValidationResult(commander=commander, card_count=len(decklist) + 1, min_lands=min_lands)
+    result = ValidationResult(commander=commander, card_count=len(decklist) + 1,
+                              min_lands=min_lands, land_target=land_target)
 
     commander_card = cache.get(commander.strip().lower())
     commander_identity = set(commander_card.get("color_identity", [])) if commander_card else set()

@@ -45,6 +45,17 @@ _DRAW_PATTERNS = (
     "draw a card for each",
 )
 
+# The single role vocabulary every tagging path must draw from — heuristics,
+# the Haiku fallback, and the budget pass's swap `role` field alike. Free-text
+# roles fragment the Stats sheet's role counts (run 9e430ab7 shipped
+# "Land/Mana base (UG dual)" / "(creature-count ramp)" variants from the
+# budget-swap model); a shared enum in every schema makes that impossible.
+CANONICAL_ROLES: list[str] = [
+    "Land/Mana base", "Ramp", "Card draw", "Removal", "Board wipe",
+    "Interaction", "Protection", "Tutor", "Synergy piece", "Card advantage",
+    "Win condition",
+]
+
 CARD_TAG_JSON_SCHEMA = {
     "type": "object",
     "properties": {
@@ -54,7 +65,7 @@ CARD_TAG_JSON_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string"},
-                    "role": {"type": "string"},
+                    "role": {"type": "string", "enum": CANONICAL_ROLES},
                     "phase": {"type": "string", "enum": ["early", "mid", "late"]},
                 },
                 "required": ["name", "role", "phase"],
@@ -94,10 +105,11 @@ def _haiku_tag_remainder(run_id: str, commander: str, names: list[str], cache: d
     from . import agent_pipeline  # local import: avoids a circular import at module load time
 
     oracle_block = agent_pipeline._oracle_text_block(cache, names)  # noqa: SLF001 — same-package helper
+    role_choices = ", ".join(f'"{r}"' for r in CANONICAL_ROLES)
     prompt = (
         f"Commander: {commander}\n\n"
-        f"For each of the following {len(names)} cards, give a short role label (e.g. \"Win condition\", "
-        f"\"Protection\", \"Synergy piece\", \"Interaction\", \"Card advantage\", \"Tutor\") and the game "
+        f"For each of the following {len(names)} cards, give a role label — choose the closest fit "
+        f"from exactly this list: {role_choices} — and the game "
         f"phase it's mainly relevant in (\"early\", \"mid\", or \"late\"). Base this on the real oracle "
         f"text below where available; use your best judgement from the name alone for anything not "
         f"listed.\n\nCards:\n" + "\n".join(f"- {n}" for n in names) +
@@ -150,3 +162,26 @@ def tag_cards(run_id: str, commander: str, cards: list[str], cache: dict) -> dic
         tags.update(_haiku_tag_remainder(run_id, commander, ambiguous, cache))
 
     return tags
+
+
+def retag_untagged(run_id: str, commander: str, cards: list[str], tags: dict[str, dict], cache: dict) -> None:
+    """Fill in role/phase for any card in `cards` that has no role in `tags`,
+    mutating `tags` in place. Run after any post-tagging deck mutation (the
+    budget pass's repair loop adds cards the original tag_cards() never saw —
+    run 9e430ab7 shipped Morphic Pool/Sunken Hollow untagged this way).
+    Heuristics first (free), one Haiku call only if anything is left ambiguous;
+    never raises — a missing tag is cosmetic."""
+    ambiguous: list[str] = []
+    for name in cards:
+        key = name.strip().lower()
+        if (tags.get(key) or {}).get("role", "").strip():
+            continue
+        card = cache.get(key)
+        heuristic = _heuristic_tag(card) if card is not None else None
+        if heuristic is not None:
+            role, phase = heuristic
+            tags[key] = {"role": role, "phase": phase}
+        else:
+            ambiguous.append(name)
+    if ambiguous:
+        tags.update(_haiku_tag_remainder(run_id, commander, ambiguous, cache))

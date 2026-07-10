@@ -27,7 +27,10 @@ Judging criteria, in order:
 3. Per house rules, favour the more unorthodox/novel angle when drafts are close in quality —
    this deck should not be another generic staples pile.
 4. Structural soundness: a sane manabase, curve, and enough ramp/draw/interaction to actually
-   function.
+   function. Use the code-computed structural counts in each draft's header as hard evidence
+   here: a draft that is far off the required card count, or far under the land quota, will
+   burn repair passes that cut cards blindly after your decision — treat that as a real defect
+   when comparing otherwise-close drafts, not a cosmetic one.
 
 Return, via the provided JSON schema:
 - `chosen_draft`: the 1-based number of the winning draft.

@@ -102,6 +102,93 @@ def _oracle_text_block(cache: dict, names: list[str]) -> str:
     return "\n".join(lines) if lines else "(none of the named key cards were found in the Scryfall cache)"
 
 
+def _count_lands(cards: list[str], cache: dict) -> int:
+    return sum(
+        1 for c in cards
+        if "land" in ((cache.get(str(c).strip().lower()) or {}).get("type_line") or "").lower()
+    )
+
+
+def _normalize_draft_cards(cards: list[str], cache: dict) -> tuple[list[str], int]:
+    """Deterministic cleanup of a raw draft list before the judge sees it:
+    strips whitespace, drops empties, and removes duplicate copies of non-
+    singleton-exempt names (keeping the first occurrence). Drafters reliably
+    emit duplicated lands (run 9e430ab7's winning draft carried 7 duplicated
+    lands in a 116-card list) — removing them in code is free, while leaving
+    them in burns model repair calls later. Returns (clean_cards,
+    duplicates_removed)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    dupes = 0
+    for raw in cards:
+        name = str(raw).strip()
+        if not name:
+            continue
+        key = name.lower()
+        card = cache.get(key)
+        exempt = card is not None and scryfall_cache._is_singleton_exempt(card)  # noqa: SLF001 — same-package helper
+        if key in seen and not exempt:
+            dupes += 1
+            continue
+        seen.add(key)
+        out.append(name)
+    return out, dupes
+
+
+# Basic land per color letter, for the deterministic mana-base top-up below.
+_BASIC_FOR_COLOR = {"W": "Plains", "U": "Island", "B": "Swamp", "R": "Mountain", "G": "Forest"}
+
+
+def _top_up_basics(concept: ConceptChoice, cards: list[str], cache: dict) -> tuple[list[str], list[str]]:
+    """Deterministic, model-free mana-base fill: while the deck is BOTH under
+    config.DECK_SIZE-1 cards AND under the land_min quota, append basics
+    weighted by the deck's colored-pip counts. Adding basics is the one deck
+    edit code can always make safely — every repair call spent on "add N
+    basics" is pure waste, and the model repairs have historically botched the
+    arithmetic while at it. Decks at exactly 99 with too few lands still go to
+    the model (choosing which nonland to cut is a quality judgment).
+    Returns (new_cards, added_basics)."""
+    land_min = int(config.ROLE_QUOTA_DEFAULTS.get("land_min", 0))
+    identity = [c for c in (concept.color_identity or []) if c in _BASIC_FOR_COLOR]
+
+    current = list(cards)
+    lands = _count_lands(current, cache)
+    room = (config.DECK_SIZE - 1) - len(current)
+    needed = min(room, land_min - lands)
+    if needed <= 0:
+        return current, []
+
+    if not identity:
+        added = ["Wastes"] * needed
+        return current + added, added
+
+    # Pip weights from the real mana costs of the nonland cards on the list —
+    # crude (hybrid pips under-count) but only steering basic-land ratios.
+    pips = {c: 0 for c in identity}
+    for name in current:
+        card = cache.get(str(name).strip().lower())
+        if card is None or "land" in ((card.get("type_line") or "").lower()):
+            continue
+        cost = card.get("mana_cost") or ""
+        for c in identity:
+            pips[c] += cost.count("{" + c + "}")
+    total = sum(pips.values())
+    if total == 0:
+        pips = {c: 1 for c in identity}
+        total = len(identity)
+
+    added: list[str] = []
+    quota = {c: (pips[c] * needed) / total for c in identity}
+    counts = {c: int(quota[c]) for c in identity}
+    # largest-remainder rounding so the added basics sum to exactly `needed`
+    remainder = needed - sum(counts.values())
+    for c in sorted(identity, key=lambda col: quota[col] - counts[col], reverse=True)[:remainder]:
+        counts[c] += 1
+    for c in identity:
+        added.extend([_BASIC_FOR_COLOR[c]] * counts[c])
+    return current + added, added
+
+
 def _role_quota_block(quotas: dict) -> str:
     q = {**config.ROLE_QUOTA_DEFAULTS, **(quotas or {})}
     return (
@@ -279,6 +366,18 @@ def _apply_swaps(cards: list[str], swaps: list[dict], strict: bool = False) -> t
             warnings.append(f"skipped malformed swap entry: {swap!r}")
             continue
 
+        # An add that's already in the list would create a singleton violation
+        # and burn a repair call to undo (run 9e430ab7: two budget swaps added
+        # duals already in the deck; the repair that cleaned it up left the
+        # replacements untagged and unpriced). Basics are singleton-exempt.
+        add_key = add_name.lower()
+        if add_key in lower_map and add_key not in scryfall_cache._BASIC_LAND_NAMES:  # noqa: SLF001 — same-package constant
+            warnings.append(
+                f"swap wants to add {add_name!r}, which is already in the decklist — "
+                f"skipping the swap entirely ({remove_name!r} kept)."
+            )
+            continue
+
         key = remove_name.lower()
         if key not in lower_map:
             if strict:
@@ -433,16 +532,31 @@ def _judge(
     build_brief, key_cards, swap_warnings, session_id) — session_id is only used if
     config.RESUME_SESSION_CHAINING is on (T6 scaffolding)."""
     tokens = concept.mechanic_tokens
+    quotas = {**config.ROLE_QUOTA_DEFAULTS}
     blocks = []
     for i, d in enumerate(drafts):
-        cards = d.get("cards", [])
+        # Deterministic cleanup + structural counts BEFORE the judge compares:
+        # drafters reliably miscount (run 9e430ab7's winner was 116 cards with 19
+        # lands and the judge praised it as "structurally sound" — it had no way
+        # to see otherwise). Duplicates are stripped in code; card/land counts are
+        # handed to the judge as evidence, same pattern as the on-mechanic count.
+        cards, dupes_removed = _normalize_draft_cards(d.get("cards", []), cache)
+        d["cards"] = cards
+        land_count = _count_lands(cards, cache)
         # Code-computed on-mechanic signal per draft — same counter the S3 synergy
         # gate uses later, handed to the judge as evidence rather than asking it
         # to eyeball 3×99 names for mechanic overlap.
         _, match_count, _ = synergy_check.gate_passes(cards, tokens, cache)
+        structural = (
+            f"{len(cards)} cards (required: {config.DECK_SIZE - 1}), "
+            f"{land_count} lands (quota {quotas['land_min']}-{quotas['land_max']})"
+        )
+        if dupes_removed:
+            structural += f"; {dupes_removed} duplicate cop{'y' if dupes_removed == 1 else 'ies'} already removed in code"
         blocks.append(
             f"Draft {i + 1} — {d.get('angle_name', '?')}\n"
             f"Gameplan: {d.get('gameplan_summary', '')}\n"
+            f"Structural counts (code-computed): {structural}\n"
             f"On-mechanic count (code-computed): {match_count} of {len(cards)} cards\n"
             f"Key cards' real printed text:\n{_oracle_text_block(cache, d.get('key_cards', []))}\n"
             f"Decklist ({len(cards)} cards):\n" + "\n".join(f"- {c}" for c in cards)
@@ -481,10 +595,25 @@ def _validate_and_repair(
     never a regurgitated full list. The land floor sits a little under the draft
     quota's land_min: it's a tripwire for a stage destroying the mana base, not
     quota enforcement, and a deck legitimately one land light shouldn't burn a
-    repair call."""
-    min_lands = max(0, int(config.ROLE_QUOTA_DEFAULTS.get("land_min", 0)) - 2)
-    current = cards
-    validation = scryfall_cache.validate_deck(concept.commander, current, cache=cache, min_lands=min_lands)
+    repair call. The repair MESSAGE, though, targets land_min itself (land_target)
+    — telling the model "at least <tripwire>" made the floor the shipped land
+    count (run 9e430ab7: exactly 33 lands against a 35-38 quota).
+
+    Before validating (and again after each repair application), an undercount
+    deck short on lands is topped up with pip-weighted basics in code —
+    _top_up_basics() — so no model call is ever spent asking for basic lands."""
+    land_min = int(config.ROLE_QUOTA_DEFAULTS.get("land_min", 0))
+    min_lands = max(0, land_min - 2)
+
+    def _validate(deck_cards: list[str]) -> ValidationResult:
+        return scryfall_cache.validate_deck(concept.commander, deck_cards, cache=cache,
+                                            min_lands=min_lands, land_target=land_min)
+
+    current, added_basics = _top_up_basics(concept, cards, cache)
+    if added_basics:
+        _log(f"{stage_prefix}: mana-base top-up — added {len(added_basics)} basic(s) in code "
+             f"({', '.join(sorted(set(added_basics)))})")
+    validation = _validate(current)
     _log(f"{stage_prefix}: validate — {'PASSED' if validation.is_valid else 'failed, entering repair loop'}")
 
     for attempt in range(1, max_attempts + 1):
@@ -507,7 +636,12 @@ def _validate_and_repair(
         current, repair_warnings = _apply_repair_deltas(current, result.parsed_json())
         for warning in repair_warnings:
             _log(f"{stage_prefix}: repair {attempt} — {warning}")
-        validation = scryfall_cache.validate_deck(concept.commander, current, cache=cache, min_lands=min_lands)
+        # A repair that cut cards may have re-opened room for the code-level
+        # basics top-up — run it again before burning another model attempt.
+        current, added_basics = _top_up_basics(concept, current, cache)
+        if added_basics:
+            _log(f"{stage_prefix}: repair {attempt} — mana-base top-up added {len(added_basics)} basic(s) in code")
+        validation = _validate(current)
         _log(f"{stage_prefix}: repair {attempt}/{max_attempts} done in {time.monotonic() - t0:.0f}s — "
              f"{'PASSED' if validation.is_valid else 'still failing'}")
 

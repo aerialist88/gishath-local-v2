@@ -175,6 +175,15 @@ MAX_SYNERGY_REPAIR_ATTEMPTS: int = int(os.environ.get("DECK_ENGINE_MAX_SYNERGY_R
 MAX_CARD_PRICE_SGD: float = float(os.environ.get("DECK_ENGINE_MAX_CARD_PRICE_SGD", "150"))
 MAX_BUDGET_REPAIR_ATTEMPTS: int = 2
 
+# Price-sanity quarantine (2026-07-10, run 9e430ab7): a local store price under
+# PRICE_SANITY_RATIO of the Card Kingdom USD reference — when that reference is
+# at least PRICE_SANITY_CK_MIN_USD — is treated as a bad match (art card/proxy/
+# wrong product) and quarantined as unpriced rather than trusted. A Bayou
+# "priced" SGD 0.45 against a USD 229.99 CK reference slid under the per-card
+# cap this way. See pricing._suspicious_prices().
+PRICE_SANITY_CK_MIN_USD: float = float(os.environ.get("DECK_ENGINE_PRICE_SANITY_CK_MIN_USD", "5"))
+PRICE_SANITY_RATIO: float = float(os.environ.get("DECK_ENGINE_PRICE_SANITY_RATIO", "0.10"))
+
 # Whole-deck budget in SGD — DISPLAY ONLY, mirroring the "no total-deck cap"
 # decision above: shown in the Atelier UI's commission knobs and available to
 # prompts, never enforced anywhere in the pipeline.
