@@ -134,14 +134,6 @@ DRAFT_JSON_SCHEMA = {
     "required": ["angle_name", "gameplan_summary", "key_cards", "cards"],
 }
 
-DECKLIST_JSON_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "cards": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": ["cards"],
-}
-
 SWAP_JSON_SCHEMA_ITEM = {
     "type": "object",
     "properties": {
@@ -166,6 +158,32 @@ SYNERGY_REPAIR_JSON_SCHEMA = {
         },
     },
     "required": ["swaps"],
+}
+
+# Validate-repair, as deltas (2026-07-10). This was the last full-regurgitation
+# stage (DECKLIST_JSON_SCHEMA) — in run 81f2b542 three repair regurgitations
+# quietly rewrote the mana base from ~36 lands down to 23 while "fixing" a card
+# count. Swaps alone can't fix a wrong count, so repair also gets cuts/adds.
+REPAIR_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "swaps": {
+            "type": "array",
+            "description": "1-for-1 replacements for illegal/hallucinated/off-color cards.",
+            "items": SWAP_JSON_SCHEMA_ITEM,
+        },
+        "cuts": {
+            "type": "array",
+            "description": "Exact card names to remove (one entry removes one copy) — for fixing an over-count.",
+            "items": {"type": "string"},
+        },
+        "adds": {
+            "type": "array",
+            "description": "Exact real card names to add — for fixing an under-count or a short mana base.",
+            "items": {"type": "string"},
+        },
+    },
+    "required": ["swaps", "cuts", "adds"],
 }
 
 JUDGE_JSON_SCHEMA = {
@@ -239,13 +257,17 @@ OPTIMIZE_JSON_SCHEMA = {
 }
 
 
-def _apply_swaps(cards: list[str], swaps: list[dict]) -> tuple[list[str], list[str]]:
+def _apply_swaps(cards: list[str], swaps: list[dict], strict: bool = False) -> tuple[list[str], list[str]]:
     """PRD v4 amendment T3: applies optimize's swap deltas to the existing decklist
     in code, rather than trusting a regurgitated full list. Returns (new_cards,
     warnings) — a `remove` name not found in the current list is a warning, not a
-    hard failure (the add still happens; the caller re-validates the result via the
-    normal Scryfall repair loop anyway, which would catch anything genuinely broken
-    from a miscounted swap, e.g. a resulting wrong card count)."""
+    hard failure. When strict=False (optimize/synergy), the add still happens without
+    a removal; the caller re-validates via the normal Scryfall repair loop, which
+    catches a resulting wrong card count. When strict=True (judge cherry-picks), the
+    whole swap is skipped instead: run 81f2b542 had a judge response whose `remove`
+    targets mostly missed, and the lenient path appended ~26 cards, ballooning the
+    deck to 125 and sending it through count-fixing repairs that mangled the mana
+    base. A dropped cherry-pick is a far smaller loss than that."""
     warnings: list[str] = []
     result = list(cards)
     lower_map = {c.strip().lower(): c for c in result}
@@ -259,6 +281,12 @@ def _apply_swaps(cards: list[str], swaps: list[dict]) -> tuple[list[str], list[s
 
         key = remove_name.lower()
         if key not in lower_map:
+            if strict:
+                warnings.append(
+                    f"swap asked to remove {remove_name!r}, which isn't in the current decklist "
+                    f"— skipping the swap entirely (strict mode), {add_name!r} not added."
+                )
+                continue
             warnings.append(
                 f"optimize asked to remove {remove_name!r}, which isn't in the current decklist "
                 f"(possibly already swapped, or a typo) — adding {add_name!r} anyway without a removal."
@@ -273,6 +301,33 @@ def _apply_swaps(cards: list[str], swaps: list[dict]) -> tuple[list[str], list[s
         lower_map[add_name.strip().lower()] = add_name
 
     return result, warnings
+
+
+def _apply_repair_deltas(cards: list[str], parsed: dict) -> tuple[list[str], list[str]]:
+    """Applies a REPAIR_JSON_SCHEMA response (swaps + cuts + adds) in code.
+    Swaps run strict — a repair targeting a card that isn't there is a model
+    error, and blindly appending is exactly the count-inflation failure this
+    schema replaces. Cuts remove one copy each (so 'cut the duplicate
+    Necroskitter' works on a list with two); unknown cut targets are warned and
+    ignored. Adds are appended as-is — the caller re-validates, which catches a
+    hallucinated add."""
+    current, warnings = _apply_swaps(cards, parsed.get("swaps", []), strict=True)
+
+    for raw_name in parsed.get("cuts", []):
+        name = str(raw_name).strip()
+        key = name.lower()
+        idx = next((i for i, c in enumerate(current) if c.strip().lower() == key), None)
+        if idx is None:
+            warnings.append(f"repair asked to cut {name!r}, which isn't in the current decklist — ignored.")
+        else:
+            current.pop(idx)
+
+    for raw_name in parsed.get("adds", []):
+        name = str(raw_name).strip()
+        if name:
+            current.append(name)
+
+    return current, warnings
 
 
 @dataclass
@@ -409,7 +464,7 @@ def _judge(
     if not isinstance(chosen, int) or not (1 <= chosen <= len(drafts)):
         chosen = 1  # a nonsense index must never crash the run — fall back to draft 1
     winning_cards = list(drafts[chosen - 1].get("cards", []))
-    winning_cards, swap_warnings = _apply_swaps(winning_cards, parsed.get("swaps", []))
+    winning_cards, swap_warnings = _apply_swaps(winning_cards, parsed.get("swaps", []), strict=True)
     _log(f"judge done in {time.monotonic() - t0:.0f}s — chose draft {chosen} "
          f"({drafts[chosen - 1].get('angle_name', '?')}), {len(parsed.get('swaps', []))} cherry-pick(s)")
     return (chosen, winning_cards, parsed.get("build_brief", ""), parsed.get("key_cards", []),
@@ -420,9 +475,16 @@ def _validate_and_repair(
     run_id: str, concept: ConceptChoice, cards: list[str], cache: dict,
     stage_prefix: str, max_attempts: int,
 ) -> tuple[list[str], ValidationResult]:
-    """Run scryfall_cache.validate_deck(); if invalid, loop repair prompts up to max_attempts."""
+    """Run scryfall_cache.validate_deck(); if invalid, loop repair prompts up to max_attempts.
+
+    Repair responses are swap/cut/add deltas applied in code (_apply_repair_deltas) —
+    never a regurgitated full list. The land floor sits a little under the draft
+    quota's land_min: it's a tripwire for a stage destroying the mana base, not
+    quota enforcement, and a deck legitimately one land light shouldn't burn a
+    repair call."""
+    min_lands = max(0, int(config.ROLE_QUOTA_DEFAULTS.get("land_min", 0)) - 2)
     current = cards
-    validation = scryfall_cache.validate_deck(concept.commander, current, cache=cache)
+    validation = scryfall_cache.validate_deck(concept.commander, current, cache=cache, min_lands=min_lands)
     _log(f"{stage_prefix}: validate — {'PASSED' if validation.is_valid else 'failed, entering repair loop'}")
 
     for attempt in range(1, max_attempts + 1):
@@ -439,11 +501,13 @@ def _validate_and_repair(
         t0 = time.monotonic()
         result = claude_cli.run(
             prompt, run_id=run_id, stage=f"{stage_prefix}/repair-{attempt}",
-            model_tier_key="validate_repair", json_schema=DECKLIST_JSON_SCHEMA,
+            model_tier_key="validate_repair", json_schema=REPAIR_JSON_SCHEMA,
             disallowed_tools=config.DISALLOWED_SEARCH_TOOLS,  # T5: repair is pure Scryfall-legality fixing, no search needed
         )
-        current = result.parsed_json().get("cards", [])
-        validation = scryfall_cache.validate_deck(concept.commander, current, cache=cache)
+        current, repair_warnings = _apply_repair_deltas(current, result.parsed_json())
+        for warning in repair_warnings:
+            _log(f"{stage_prefix}: repair {attempt} — {warning}")
+        validation = scryfall_cache.validate_deck(concept.commander, current, cache=cache, min_lands=min_lands)
         _log(f"{stage_prefix}: repair {attempt}/{max_attempts} done in {time.monotonic() - t0:.0f}s — "
              f"{'PASSED' if validation.is_valid else 'still failing'}")
 

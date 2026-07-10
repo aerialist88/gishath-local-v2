@@ -742,7 +742,9 @@ if __name__ == "__main__":
     start_browser()   # Playwright Chromium (background thread + event loop)
     ck_price.start_background_refresher()  # self-healing CK price cache (see ck_price.py)
 
-    port = int(os.environ.get("PORT", 5003))
+    # GISHATH_PORT (shared with deck_engine/config.py) wins over the generic
+    # PORT, which dev harnesses inject into unrelated processes.
+    port = int(os.environ.get("GISHATH_PORT", os.environ.get("PORT", 5003)))
     log.info("Flask app starting on http://127.0.0.1:%d", port)
 
     # IMPORTANT: debug=False and use_reloader=False are both required.

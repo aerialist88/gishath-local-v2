@@ -229,6 +229,9 @@ class ValidationResult:
     color_identity_violations: list[str] = field(default_factory=list)
     singleton_violations: list[str] = field(default_factory=list)  # duplicate, non-exempt names
     wrong_card_count: bool = False
+    land_count: int = 0            # lands actually found in the decklist (cache type_line)
+    min_lands: int = 0             # floor requested by the caller; 0 = land check not requested
+    too_few_lands: bool = False
 
     @property
     def is_valid(self) -> bool:
@@ -238,6 +241,7 @@ class ValidationResult:
             or self.color_identity_violations
             or self.singleton_violations
             or self.wrong_card_count
+            or self.too_few_lands
         )
 
     def as_repair_notes(self) -> str:
@@ -255,6 +259,12 @@ class ValidationResult:
             lines.append(f"- Outside {self.commander}'s color identity: {', '.join(self.color_identity_violations)}")
         if self.singleton_violations:
             lines.append(f"- Singleton violation (duplicate, not exempt): {', '.join(self.singleton_violations)}")
+        if self.too_few_lands:
+            lines.append(
+                f"- Only {self.land_count} lands — the mana base has been damaged. Add basic lands "
+                f"in the commander's colors (cutting the weakest nonland cards) until the deck has "
+                f"at least {self.min_lands} lands."
+            )
         return "\n".join(lines)
 
 
@@ -266,7 +276,8 @@ def _is_singleton_exempt(card: dict) -> bool:
     return _SINGLETON_EXEMPT_PHRASE in oracle_text
 
 
-def validate_deck(commander: str, decklist: list[str], cache: dict[str, dict] | None = None) -> ValidationResult:
+def validate_deck(commander: str, decklist: list[str], cache: dict[str, dict] | None = None,
+                  min_lands: int = 0) -> ValidationResult:
     """Validate a 99-card decklist against `commander`.
 
     Args:
@@ -274,9 +285,14 @@ def validate_deck(commander: str, decklist: list[str], cache: dict[str, dict] | 
                    itself checked for legality — assumed chosen legitimately by the selector).
         decklist:  the other cards in the deck (should be config.DECK_SIZE - 1 entries).
         cache:     pre-loaded cache dict; loads from disk if omitted.
+        min_lands: if > 0, flag the deck when it has fewer lands than this. Guards against
+                   pipeline stages mangling the mana base (run 81f2b542 shipped 23 lands after
+                   repair regurgitations ate a third of it), so callers should pass a floor a
+                   little under the draft quota, not the quota itself — this is a tripwire for
+                   catastrophic loss, not quota enforcement.
     """
     cache = cache if cache is not None else load_cache()
-    result = ValidationResult(commander=commander, card_count=len(decklist) + 1)
+    result = ValidationResult(commander=commander, card_count=len(decklist) + 1, min_lands=min_lands)
 
     commander_card = cache.get(commander.strip().lower())
     commander_identity = set(commander_card.get("color_identity", [])) if commander_card else set()
@@ -297,6 +313,9 @@ def validate_deck(commander: str, decklist: list[str], cache: dict[str, dict] | 
             result.unknown_cards.append(name)
             continue
 
+        if "land" in (card.get("type_line") or "").lower():
+            result.land_count += 1
+
         legality = (card.get("legalities") or {}).get("commander", "not_legal")
         if legality == "banned":
             result.banned_cards.append(name)
@@ -312,6 +331,9 @@ def validate_deck(commander: str, decklist: list[str], cache: dict[str, dict] | 
         if card is not None and _is_singleton_exempt(card):
             continue
         result.singleton_violations.append(key)
+
+    if min_lands > 0 and result.land_count < min_lands:
+        result.too_few_lands = True
 
     return result
 

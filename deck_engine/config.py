@@ -62,11 +62,12 @@ for _d in (STATE_DIR, LOG_DIR, PROMPTS_DIR, OUTPUT_DIR):
 # ── gishath-local-v2 Flask app (pricing backend) ─────────────────────────────
 # Must already be running (`make run`) before the nightly job starts — see
 # PRD §4b / §6 risk "gishath-local-v2 not running when the job starts".
-# NOTE: app.py's actual default port is 5003 (its own docstring/comments say
-# 5001 — that's stale; verified against `app.py` line `port = int(os.environ
-# .get("PORT", 5003))` on 2026-07-01). Always read the real default from the
-# same env var app.py uses, not from stale docs.
-GISHATH_APP_PORT: int = int(os.environ.get("PORT", 5003))
+# GISHATH_PORT, not the generic PORT: dev harnesses inject PORT=<own port>
+# into whatever process they launch, so an Atelier started that way would
+# read PORT=5077 here and price against *itself* — /api/health answers,
+# /search 404s, and the whole run silently ships unpriced (run 81f2b542,
+# 2026-07-10). app.py honors the same GISHATH_PORT, so one var moves both.
+GISHATH_APP_PORT: int = int(os.environ.get("GISHATH_PORT", 5003))
 GISHATH_APP_BASE: str = f"http://127.0.0.1:{GISHATH_APP_PORT}"
 GISHATH_HEALTH_URL: str = f"{GISHATH_APP_BASE}/api/health"
 GISHATH_SEARCH_URL: str = f"{GISHATH_APP_BASE}/search"

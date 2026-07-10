@@ -7,14 +7,21 @@ $repair_notes
 Current decklist ($card_count cards, should be $deck_size_minus_1):
 $current_decklist_block
 
-Return a CORRECTED, complete decklist of exactly $deck_size_minus_1 card names that fixes
-every issue listed above while keeping as much of the original gameplan intact as possible.
-Replace only the problem cards — do not rebuild the whole deck from scratch unless the notes
-require it. Respond only via the provided JSON schema — a flat list of exactly
-$deck_size_minus_1 card name strings.
+Fix ONLY the issues listed above, as targeted deltas — do NOT return the whole decklist:
+
+- **swaps** — replace a problem card 1-for-1 (hallucinated, banned, off-color) with a real,
+  Commander-legal card inside the commander's color identity. `remove` must match a name in
+  the decklist above exactly.
+- **cuts** — remove cards when the deck is over $deck_size_minus_1. Cut the weakest,
+  most off-plan cards first, and never cut lands to fix a count problem. Each entry removes
+  one copy, so a duplicate is fixed by cutting the name once.
+- **adds** — add cards when the deck is under $deck_size_minus_1, or when the notes say the
+  mana base is short. Basic lands in the commander's colors are always safe adds.
+
+Make the arithmetic work: $card_count current + adds − cuts must equal exactly
+$deck_size_minus_1 (swaps don't change the count).
 
 Before calling the structured-output tool, briefly narrate what you're fixing — which cards
-are coming out, what's replacing them, and why each replacement resolves its issue. This
-streams live to whoever is watching the commission. Keep it to a few sentences per fix, and
-do NOT enumerate the rest of the decklist — the full list belongs only in the structured
-output.
+are coming out, what's replacing them, and why each change resolves its issue. This streams
+live to whoever is watching the commission. Keep it to a few sentences per fix, and do NOT
+enumerate the rest of the decklist.
