@@ -1370,7 +1370,21 @@ function renderSimulation(root, session) {
     return nameRe ? safe.replace(nameRe, '<span class="card-name" data-card="$1">$1</span>') : safe;
   };
   const champ = seat(winner.seat);
-  const rowStyle = "display:flex;gap:12px;align-items:baseline;padding:7px 4px;border-top:1px solid rgba(120,90,30,.14);font-size:13.5px";
+  // Per-turn resource tracker (Forge games only): each seat's lands in play,
+  // and the mana it produced that turn. Lands and mana are the two board
+  // resources the engine log exposes by object id, so they're exact; creatures
+  // and other permanents leave no id trail and are deliberately not counted.
+  const boardStrip = (t) => {
+    if (!t.board) return "";
+    const cells = (g.players || []).map((p) => {
+      const b = t.board[String(p.seat)]; if (!b) return "";
+      const active = p.seat === t.seat;
+      const mana = active && b.mana ? ` ${esc(b.mana)}◈` : "";
+      return `<span style="${active ? "color:var(--ink2);font-weight:600" : ""}">P${esc(p.seat)} ${esc(b.lands)}🜨${mana}</span>`;
+    }).filter(Boolean).join('<span style="opacity:.4"> · </span>');
+    return `<div class="mono" style="font-size:10.5px;color:var(--ink3);padding:0 4px 6px 42px;display:flex;gap:6px;flex-wrap:wrap;align-items:baseline"><span style="opacity:.6">🜨 lands · ◈ mana/turn</span><span style="opacity:.4">|</span>${cells}</div>`;
+  };
+  const rowStyle = "display:flex;gap:12px;align-items:baseline;padding:7px 4px 3px;border-top:1px solid rgba(120,90,30,.14);font-size:13.5px";
   const engineLabel = g.engine === "forge" ? "Forge rules engine · real game" : "LLM referee · seed " + esc(g.seed);
   root.innerHTML = `<section class="simulation-result">
     <div class="result-head"><div><div class="caps">Simulated game · ${engineLabel}</div>
@@ -1382,11 +1396,14 @@ function renderSimulation(root, session) {
     ${result.opening_note && winner.method ? `<p class="match-note">${markCards(result.opening_note)}</p>` : ""}
     <div style="margin-top:14px">
       <div class="caps" style="margin-bottom:6px">The game, turn by turn</div>
-      ${turns.map((t) => `<div style="${rowStyle}">
-        <span class="mono" style="font-size:11px;color:var(--ink3);min-width:30px">T${esc(t.turn)}</span>
-        <b style="min-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc((seat(t.seat).commander || "Player " + t.seat).split(",")[0])}</b>
-        <span style="flex:1">${markCards(t.play)}</span>
-        <span class="mono" style="font-size:11px;color:var(--ink3);white-space:nowrap">${(t.life || []).map(esc).join(" · ")}</span>
+      ${turns.map((t) => `<div>
+        <div style="${rowStyle}">
+          <span class="mono" style="font-size:11px;color:var(--ink3);min-width:30px">T${esc(t.turn)}</span>
+          <b style="min-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc((seat(t.seat).commander || "Player " + t.seat).split(",")[0])}</b>
+          <span style="flex:1">${markCards(t.play)}</span>
+          <span class="mono" style="font-size:11px;color:var(--ink3);white-space:nowrap">${(t.life || []).map(esc).join(" · ")}</span>
+        </div>
+        ${boardStrip(t)}
       </div>`).join("")}
     </div>
     <div class="snapshot"><div class="caps">Deck reports — how each build performed</div>

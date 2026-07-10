@@ -85,6 +85,19 @@ def _forge_name(name: str) -> tuple[str, int]:
     return name, qty
 
 
+def deck_land_names(deck: dict) -> set[str]:
+    """Lowercased Forge names of every land in a deck — lets the board tracker
+    classify a mana source as a land rather than a rock. Uses the card row's
+    Scryfall type_line."""
+    out: set[str] = set()
+    for row in deck.get("cards") or []:
+        if "land" in str(row.get("type_line") or "").lower():
+            name, _ = _forge_name(str(row.get("name") or ""))
+            if name:
+                out.add(name.lower())
+    return out
+
+
 def _write_dck(deck: dict, seat: int) -> str:
     """Serialize one Atelier deck record into Forge's .dck format. Returns the
     filename (relative, as SimulateMatch wants it). Deck Name is the commander,
@@ -132,7 +145,24 @@ def _short(target: str, limit: int = 48) -> str:
     return target if len(target) <= limit else target[: limit - 1] + "…"
 
 
-def parse_log(raw: str, names_by_seat: dict[int, str]) -> dict:
+_ADD_RE = re.compile(r"Add (.+?)\.")
+_PIP_RE = re.compile(r"\{([^}]+)\}")
+_WORD_NUM = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7}
+
+
+def _mana_pips(line: str) -> int:
+    """How much mana a 'Mana:' activation produced, from its 'Add …' clause.
+    '{C}{C}' -> 2, '{2}' -> 2, '{R} or {W}' -> 1 (a choice), a worded 'Add one
+    mana of any color' -> 1. Never returns 0 — every Mana line made mana."""
+    m = _ADD_RE.search(line)
+    clause = m.group(1) if m else ""
+    if " or " in clause:  # a choice between colors is still one mana
+        return 1
+    total = sum(int(sym) if sym.isdigit() else 1 for sym in _PIP_RE.findall(clause))
+    return total or 1
+
+
+def parse_log(raw: str, names_by_seat: dict[int, str], land_names: set[str] | None = None) -> dict:
     """Forge's typed game log -> the Atelier session-result shape.
 
     Every fact here is transcribed from an engine event line — nothing is
@@ -151,10 +181,23 @@ def parse_log(raw: str, names_by_seat: dict[int, str]) -> dict:
     Alongside the summary, a full structured account is built under `detail`:
     every parsed engine event (casts, activations, triggers, resolutions,
     combat assignments, damage with combat/non-combat kind, life changes,
-    zone changes, discards, replacement effects), in order, per turn — the
-    machine-readable export the raw log is not."""
+    zone changes, discards, draws, replacement effects), in order, per turn —
+    the machine-readable export the raw log is not.
+
+    Board tracker: a battlefield is reconstructed by object id (lands from
+    `Land:` lines and ramp discovered via `Mana:` lines; creatures from
+    `Resolve Stack: X (id) - Creature P/T`; removed on `Zone Change … from
+    Battlefield`). Each turn entry gets a `board` snapshot per seat — lands and
+    creatures in play, and mana produced that turn (summed from `Mana:` lines'
+    Add clauses). `land_names` (lowercased) classifies mana sources as land vs
+    rock; without it, only cards seen entering via `Land:` count as lands.
+    Static noncreature permanents (anthems, mana-less artifacts) leave no id
+    trail in Forge's log, so they are deliberately not counted — the tracker
+    reports lands/creatures/mana, never a permanents total it can't stand
+    behind."""
     seats = sorted(names_by_seat)
     commanders = {name: s for s, name in names_by_seat.items()}
+    land_names = {n.lower() for n in (land_names or set())}
     life = {s: 40 for s in seats}
     mulligans = {s: 0 for s in seats}
     kept_hands: dict[int, int] = {}
@@ -162,6 +205,10 @@ def parse_log(raw: str, names_by_seat: dict[int, str]) -> dict:
     cmd_damage: dict[str, dict[int, int]] = {}   # commander name -> target seat -> total combat damage
     casts_by_seat: dict[int, set[str]] = {s: set() for s in seats}
     turn_counts = {s: 0 for s in seats}
+    # Battlefield reconstructed by object id, for the per-turn board tracker.
+    battlefield: dict[int, dict] = {}   # id -> {"seat", "kind": land|creature|other, "name"}
+    last_cast: dict[str, int] = {}      # cleaned card name -> seat that most recently cast it
+    pt_by_name: dict[str, str] = {}     # cleaned creature name -> "P/T", for richer cast prose
     turns: list[dict] = []
     detail_turns: list[dict] = []
     pregame: list[dict] = []
@@ -169,6 +216,26 @@ def parse_log(raw: str, names_by_seat: dict[int, str]) -> dict:
     unsupported: list[str] = []
     outcome_reasons: list[str] = []
     winner_seat = None
+
+    def _enter(oid: int, seat: int | None, kind: str, name: str) -> None:
+        if oid not in battlefield:
+            battlefield[oid] = {"seat": seat, "kind": kind, "name": name}
+        else:  # first sighting may be as an unknown mana source; upgrade kind/seat when learned
+            slot = battlefield[oid]
+            if kind != "other":
+                slot["kind"] = kind
+            if slot["seat"] is None and seat is not None:
+                slot["seat"] = seat
+
+    def _board_snapshot() -> dict:
+        # Lands and mana-produced only: both are grounded in id-bearing engine
+        # lines. Creatures and static permanents have no reliable id trail (see
+        # the Resolve Stack note below), so no permanents total is claimed.
+        snap = {s: {"lands": 0, "mana": current["mana"][s] if current else 0} for s in seats}
+        for obj in battlefield.values():
+            if obj["seat"] in snap and obj["kind"] == "land":
+                snap[obj["seat"]]["lands"] += 1
+        return {str(s): snap[s] for s in seats}
 
     def _event(event: dict) -> None:
         (current["events"] if current is not None else pregame).append(event)
@@ -181,9 +248,13 @@ def parse_log(raw: str, names_by_seat: dict[int, str]) -> dict:
         bits = []
         if current["lands"]:
             bits.append("Plays " + ", ".join(current["lands"]) + ".")
-        if current["casts"]:
-            bits.append("Casts " + ", ".join(current["casts"]) + ".")
+        if current["casts"]:  # append each creature's P/T, learned when its spell resolved
+            labels = [c["name"] + (f" ({pt})" if (pt := pt_by_name.get(c['name'])) else "")
+                      + (f" → {_short(c['target'])}" if c["target"] else "") for c in current["casts"]]
+            bits.append("Casts " + ", ".join(labels) + ".")
         bits.extend(current["responses"])   # spells/abilities from the other seats, in order
+        for who, n in current["draws"]:
+            bits.append((f"Player {who} draws" if who != active else "Draws") + (f" {n} cards." if n != 1 else " a card."))
         if current["attacks"]:
             for target, attackers in current["attacks"].items():
                 bits.append(f"Attacks {target} with " + ", ".join(attackers) + ".")
@@ -203,11 +274,13 @@ def parse_log(raw: str, names_by_seat: dict[int, str]) -> dict:
         current["entry"]["play"] = " ".join(bits)
         current["entry"]["life"] = [life[s] for s in seats]
         current["entry"]["cards_played"] = current["cards_played"]
+        current["entry"]["board"] = _board_snapshot()
         turns.append(current["entry"])
         detail_turns.append({
             "game_turn": current["entry"]["game_turn"], "seat": active,
             "seat_turn": current["entry"]["turn"],
             "life_after": {str(s): life[s] for s in seats},
+            "board": current["entry"]["board"],
             "events": current["events"],
         })
         current = None
@@ -226,18 +299,21 @@ def parse_log(raw: str, names_by_seat: dict[int, str]) -> dict:
             current = {
                 "entry": {"turn": turn_counts[seat], "game_turn": int(m.group(1)),
                           "seat": seat, "play": "", "life": [], "cards_played": []},
-                "lands": [], "casts": [], "responses": [], "attacks": {}, "damage": {},
+                "lands": [], "casts": [], "responses": [], "draws": [], "attacks": {}, "damage": {},
                 "cmd_damage": [], "blocks": [], "died": [], "exiled": [], "discards": [],
-                "eliminations": [], "cards_played": [], "events": [],
+                "eliminations": [], "cards_played": [], "events": [], "mana": {s: 0 for s in seats},
             }
         elif line.startswith("Land: ") and current is not None:
-            m = re.match(r"Land: (.+) played (.+)$", line)
+            m = re.match(r"Land: (.+) played (.+?)(?: \((\d+)\))?$", line)
             if m:
                 name = _strip_ids(m.group(2))
+                seat = _seat_of(m.group(1), names_by_seat)
                 current["lands"].append(name)
                 current["cards_played"].append(name)
                 casts_by_seat[current["entry"]["seat"]].add(name)
-                _event({"type": "land", "seat": current["entry"]["seat"], "card": name})
+                if m.group(3):
+                    _enter(int(m.group(3)), seat, "land", name)
+                _event({"type": "land", "seat": seat, "card": name})
         elif line.startswith("Add To Stack: "):
             m = re.match(r"Add To Stack: (.+?) (cast|activated|triggered) (.+?)(?: targeting \[(.+)\])?$", line)
             if m:
@@ -248,19 +324,35 @@ def parse_log(raw: str, names_by_seat: dict[int, str]) -> dict:
                         "seat": seat, "card": name, **({"targets": targets} if targets else {})})
                 if seat is None or current is None or verb == "triggered":
                     continue  # triggers stay in the detail export — one per upkeep gets noisy in prose
-                label = name + (f" → {_short(targets[0])}" if targets else "")
                 if verb == "cast":
+                    last_cast[name] = seat  # so the object's controller is known when it resolves with an id
                     casts_by_seat[seat].add(name)
                     if seat == current["entry"]["seat"]:
-                        current["casts"].append(label)
+                        current["casts"].append({"name": name, "target": targets[0] if targets else ""})
                         current["cards_played"].append(name)
                     else:  # instants and flash from the other seats — the interaction that decides games
+                        label = name + (f" → {_short(targets[0])}" if targets else "")
                         current["responses"].append(f"Player {seat} casts {label}.")
                 elif verb == "activated":
+                    label = name + (f" → {_short(targets[0])}" if targets else "")
                     prefix = "Activates" if seat == current["entry"]["seat"] else f"Player {seat} activates"
                     current["responses"].append(f"{prefix} {label}.")
         elif line.startswith("Resolve Stack: "):
-            _event({"type": "resolve", "text": _strip_ids(line[len("Resolve Stack: "):])})
+            body = line[len("Resolve Stack: "):]
+            # A creature resolving prints its base P/T (no id): "Werebear - Creature 2 / 2".
+            # Used only to enrich cast prose — creatures can't be board-tracked
+            # by id because neither the resolve nor any ETB line carries one.
+            cm = re.match(r"(.+?) - Creature (\d+) / (\d+)$", body)
+            if cm:
+                pt_by_name[cm.group(1).strip()] = f"{cm.group(2)}/{cm.group(3)}"
+            # Card draws name their player: "Growth Spiral - Ai(1)-... draws a card / three cards".
+            for dm in re.finditer(r"Ai\((\d+)\)-.+? draws (a|an|\w+) cards?", body):
+                dseat = int(dm.group(1))
+                n = 1 if dm.group(2) in ("a", "an") else _WORD_NUM.get(dm.group(2).lower(), 1)
+                if dseat in names_by_seat and current is not None:
+                    current["draws"].append((dseat, n))
+                    _event({"type": "draw", "seat": dseat, "cards": n})
+            _event({"type": "resolve", "text": _strip_ids(body)})
         elif line.startswith("Replacement Effect: "):
             _event({"type": "replacement", "text": line[len("Replacement Effect: "):]})
         # Combat declarations are multi-line log entries: only the first line
@@ -282,13 +374,27 @@ def parse_log(raw: str, names_by_seat: dict[int, str]) -> dict:
         elif current is not None and (m := re.match(r"(?:Combat: )?(Ai\(\d+\)-.+?) didn't block (.+?)\.?$", line)):
             _event({"type": "no_block", "seat": _seat_of(m.group(1), names_by_seat), "attacker": _strip_ids(m.group(2))})
         elif line.startswith("Zone Change: ") and current is not None:
-            m = re.match(r"Zone Change: (.+?) was put into (Graveyard|Exile) from Battlefield\.?$", line)
+            m = re.match(r"Zone Change: (.+?)(?: \((\d+)\))? was put into (Graveyard|Exile) from Battlefield\.?$", line)
             if m:
                 name = _strip_ids(m.group(1))
-                bucket = current["died"] if m.group(2) == "Graveyard" else current["exiled"]
+                if m.group(2):
+                    battlefield.pop(int(m.group(2)), None)  # left the battlefield — drop from the board tracker
+                bucket = current["died"] if m.group(3) == "Graveyard" else current["exiled"]
                 if name not in bucket:
                     bucket.append(name)
-                _event({"type": "zone", "card": name, "to": m.group(2).lower()})
+                _event({"type": "zone", "card": name, "to": m.group(3).lower()})
+        elif line.startswith("Mana: ") and current is not None:
+            m = re.match(r"Mana: (.+?) \((\d+)\) -", line)
+            if m:
+                oid, mname = int(m.group(2)), m.group(1).strip()
+                # Attribute to the object's known controller; otherwise to whoever
+                # cast it (mana rocks/dorks), else the active player (ramped lands).
+                slot = battlefield.get(oid)
+                seat = slot["seat"] if slot and slot["seat"] is not None else last_cast.get(mname, current["entry"]["seat"])
+                if oid not in battlefield:  # first sighting: a mana source we hadn't placed yet
+                    _enter(oid, seat, "land" if mname.lower() in land_names else "other", mname)
+                if seat in current["mana"]:
+                    current["mana"][seat] += _mana_pips(line)
         elif line.startswith("Discard: ") and current is not None:
             m = re.match(r"Discard: (.+?) discards (.+?)\.?$", line)
             if m:
@@ -388,12 +494,14 @@ def run_match(deck_ids: list[str]) -> dict:
         raise ValueError("Forge engine is not installed under third_party/ — see atelier/forge_engine.py.")
 
     names_by_seat: dict[int, str] = {}
+    land_names: set[str] = set()   # for the board tracker: classify mana sources as land vs rock
     filenames: list[str] = []
     for seat, deck_id in enumerate(deck_ids, start=1):
         deck = archive.get_deck(deck_id)
         if deck is None:
             raise ValueError("One of the selected decks could not be found.")
         names_by_seat[seat] = str(deck.get("commander") or f"Deck {seat}")
+        land_names |= deck_land_names(deck)
         filenames.append(_write_dck(deck, seat))
 
     cmd = [
@@ -409,4 +517,4 @@ def run_match(deck_ids: list[str]) -> dict:
         tail = raw.strip().splitlines()[-8:]
         raise ValueError("Forge did not finish the game. Log tail: " + " | ".join(tail))
 
-    return {"result": parse_log(raw, names_by_seat), "raw_log": raw, "names_by_seat": names_by_seat}
+    return {"result": parse_log(raw, names_by_seat, land_names), "raw_log": raw, "names_by_seat": names_by_seat}

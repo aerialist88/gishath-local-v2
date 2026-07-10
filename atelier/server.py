@@ -252,7 +252,12 @@ def simulation_forge_details(session_id: str):
         if log_path.exists() and session is not None:
             players = (session.get("grounding") or {}).get("players") or []
             names = {p["seat"]: p.get("commander", f"Deck {p['seat']}") for p in players}
-            parsed = forge_engine.parse_log(log_path.read_text(), names)
+            land_names: set[str] = set()
+            for p in players:
+                deck = archive.get_deck(p.get("deck_id"))
+                if deck:
+                    land_names |= forge_engine.deck_land_names(deck)
+            parsed = forge_engine.parse_log(log_path.read_text(), names, land_names)
             return jsonify({"session_id": clean, "rebuilt_from_raw_log": True,
                             "players": players, "winner": parsed["winner"],
                             "mulligans": parsed["mulligans"], "kept_hands": parsed["kept_hands"],
