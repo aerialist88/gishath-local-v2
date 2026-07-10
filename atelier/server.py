@@ -273,6 +273,14 @@ def simulation_forge_log(session_id: str):
     return _simulation_receipt(session_id, ".forge.log", "text/plain")
 
 
+@app.route("/api/engine")
+def engine_status():
+    """Which simulation engine games will run on — the UI hides the LLM
+    referee's grounding paraphernalia (source documents, replay seed) when
+    the Forge rules engine is installed and will be used instead."""
+    return jsonify({"forge": forge_engine.is_available()})
+
+
 @app.route("/api/rules", methods=["GET", "POST"])
 def comprehensive_rules():
     """Status/explicit refresh for the local official-rules cache."""

@@ -1233,7 +1233,8 @@ function statsTab(deck) {
 /* ── match rehearsal ────────────────────────────────────────────────────── */
 
 async function viewMatch() {
-  const [decks, ruleStatus] = await Promise.all([api("/api/decks"), api("/api/rules")]);
+  const [decks, ruleStatus, engine] = await Promise.all([api("/api/decks"), api("/api/rules"), api("/api/engine").catch(() => ({}))]);
+  const forge = !!engine.forge; // Forge games ignore the seed and never read the LLM grounding documents
   HEAD_SUB.textContent = "grounded Commander playtest";
   HEAD_RIGHT.innerHTML = "";
   const cards = decks.map((d, i) => `<label class="match-deck ${i < 4 ? "selected" : ""}">
@@ -1245,7 +1246,7 @@ async function viewMatch() {
     <div class="match-hero">
       <div><div class="caps-lg">Commander match simulation</div>
         <h1>Play the decks against each other, to a winner.</h1>
-        <p>Choose 2–4 finished commissions. The game is played on the <b>Forge rules engine</b> — real zones, real priority, real combat, an AI that plays to win — and each deck gets an honest performance report at the end. (Falls back to the LLM referee if Forge isn't installed.)</p>
+        <p>Choose 2–4 finished commissions. The game is played on the <b>Forge rules engine</b> — real zones, real priority, real combat, an AI that plays to win — and each deck gets an honest performance report at the end.${forge ? "" : " (Forge isn't installed, so the LLM referee will run this game.)"}</p>
       </div>
       <aside class="plaque-dark"><div class="caps" style="color:var(--plaque-text)">Engine truth</div>
         <p>Hands, libraries, and the battlefield are engine data structures, not narration — nothing can be hallucinated. The full typed game log is kept as receipts beside each session.</p>
@@ -1254,10 +1255,10 @@ async function viewMatch() {
     ${decks.length >= 2 ? `<section class="match-panel">
       <div class="match-panel-head"><div><div class="caps">Seats at the table</div><h2>Choose your pod</h2></div><span id="match-count" class="pill">${Math.min(decks.length, 4)} selected</span></div>
       <div class="match-decks">${cards}</div>
-      <div class="match-actions"><label class="seed-field">Replay seed <input id="match-seed" inputmode="numeric" placeholder="Random"></label><button class="btn-brass" id="btn-run-match">Play the match</button></div>
-      <p class="match-note">Played to an actual winner — the deck reports at the end are how the Atelier grades its own builds. Genuinely ambiguous rules moments are resolved reasonably and logged as judgement calls.</p>
+      <div class="match-actions">${forge ? "" : `<label class="seed-field">Replay seed <input id="match-seed" inputmode="numeric" placeholder="Random"></label>`}<button class="btn-brass" id="btn-run-match">Play the match</button></div>
+      <p class="match-note">Played to an actual winner — the deck reports at the end are how the Atelier grades its own builds.${forge ? "" : " Genuinely ambiguous rules moments are resolved reasonably and logged as judgement calls."}</p>
     </section>` : `<div class="empty-note">Forge at least two decks before staging a rehearsal.</div>`}
-    <section class="guide-card"><div class="caps">Source documents</div><div><b>Commander Match Simulation Guide</b><span>deck_engine/prompts/commander_match_guide.md</span></div><div><b>Card Oracle text</b><span>Local Scryfall bulk cache — exact text is bundled only for the selected decks.</span></div><div><b>Magic Comprehensive Rules</b><span>${ruleStatus.available ? `local indexed copy · effective ${esc(ruleStatus.effective_date || "date unavailable")}` : "not cached yet"}</span><button class="rule-refresh" id="btn-refresh-rules">${ruleStatus.available ? "Refresh official rules" : "Download official rules"}</button></div></section>
+    ${forge ? "" : `<section class="guide-card"><div class="caps">Source documents</div><div><b>Commander Match Simulation Guide</b><span>deck_engine/prompts/commander_match_guide.md</span></div><div><b>Card Oracle text</b><span>Local Scryfall bulk cache — exact text is bundled only for the selected decks.</span></div><div><b>Magic Comprehensive Rules</b><span>${ruleStatus.available ? `local indexed copy · effective ${esc(ruleStatus.effective_date || "date unavailable")}` : "not cached yet"}</span><button class="rule-refresh" id="btn-refresh-rules">${ruleStatus.available ? "Refresh official rules" : "Download official rules"}</button></div></section>`}
     <div id="match-result"></div>
     <section id="match-history"></section>
   </div>`;
@@ -1281,7 +1282,7 @@ async function viewMatch() {
   };
   if (run) run.onclick = async () => {
     const deckIds = checks.filter((input) => input.checked).map((input) => input.value);
-    const rawSeed = $("#match-seed").value.trim();
+    const rawSeed = ($("#match-seed")?.value || "").trim();
     if (deckIds.length < 2) { toast("Choose at least two decks."); return; }
     if (rawSeed && !/^\d+$/.test(rawSeed)) { toast("Use a whole-number seed, or leave it blank."); return; }
     run.disabled = true;
@@ -1370,6 +1371,18 @@ function renderSimulation(root, session) {
     return nameRe ? safe.replace(nameRe, '<span class="card-name" data-card="$1">$1</span>') : safe;
   };
   const champ = seat(winner.seat);
+  // The engine's method string is a semicolon chain ("X has won because …;
+  // Y has lost because …; Z has lost because …") — keep the win as the
+  // headline and fold the per-player losses into a quieter second line.
+  const reasons = String(winner.method || "").split("; ");
+  const headline = reasons[0] || "";
+  const losses = reasons.slice(1);
+  // One muted, parchment-friendly tint per seat, used everywhere a player is
+  // named — turn rows, board strips, life totals, deck reports — so "who is
+  // P3" reads at a glance.
+  const SEAT_TINTS = ["#a2543a", "#3f6488", "#5c7a44", "#7c5482"];
+  const tint = (s) => SEAT_TINTS[(s - 1) % SEAT_TINTS.length] || "var(--ink3)";
+  const dot = (s, size = 7) => `<span style="display:inline-block;width:${size}px;height:${size}px;border-radius:50%;background:${tint(s)};vertical-align:baseline;flex:none"></span>`;
   // Per-turn resource tracker (Forge games only): each seat's lands in play,
   // and the mana it produced that turn. Lands and mana are the two board
   // resources the engine log exposes by object id, so they're exact; creatures
@@ -1378,37 +1391,50 @@ function renderSimulation(root, session) {
     if (!t.board) return "";
     const cells = (g.players || []).map((p) => {
       const b = t.board[String(p.seat)]; if (!b) return "";
+      if ((t.life || [])[p.seat - 1] <= 0)  // eliminated — their battlefield is gone, don't show stale counts
+        return `<span title="${esc(p.commander)} — eliminated" style="display:inline-flex;align-items:center;gap:4px;opacity:.35">${dot(p.seat, 6)}out</span>`;
       const active = p.seat === t.seat;
       const mana = active && b.mana ? ` ${esc(b.mana)}◈` : "";
-      return `<span style="${active ? "color:var(--ink2);font-weight:600" : ""}">P${esc(p.seat)} ${esc(b.lands)}🜨${mana}</span>`;
-    }).filter(Boolean).join('<span style="opacity:.4"> · </span>');
-    return `<div class="mono" style="font-size:10.5px;color:var(--ink3);padding:0 4px 6px 42px;display:flex;gap:6px;flex-wrap:wrap;align-items:baseline"><span style="opacity:.6">🜨 lands · ◈ mana/turn</span><span style="opacity:.4">|</span>${cells}</div>`;
+      return `<span title="${esc(p.commander)}" style="display:inline-flex;align-items:center;gap:4px;${active ? "color:var(--ink2);font-weight:600" : "opacity:.75"}">${dot(p.seat, 6)}${esc(b.lands)}🜨${mana}</span>`;
+    }).filter(Boolean).join('<span style="opacity:.35">·</span>');
+    return `<div class="mono" style="font-size:10.5px;color:var(--ink3);padding:0 4px 6px 42px;display:flex;gap:8px;flex-wrap:wrap;align-items:baseline">${cells}</div>`;
   };
-  const rowStyle = "display:flex;gap:12px;align-items:baseline;padding:7px 4px 3px;border-top:1px solid rgba(120,90,30,.14);font-size:13.5px";
+  // Whether any turn carries a board tracker — decides if the legend is shown.
+  const hasBoard = turns.some((t) => t.board);
+  const rowStyle = "display:flex;gap:12px;align-items:baseline;padding:7px 4px 3px;font-size:13.5px;";
   const engineLabel = g.engine === "forge" ? "Forge rules engine · real game" : "LLM referee · seed " + esc(g.seed);
   root.innerHTML = `<section class="simulation-result">
     <div class="result-head"><div><div class="caps">Simulated game · ${engineLabel}</div>
       <h2>${champ.commander ? esc(champ.commander) + " takes the table" : "Game complete"}</h2>
-      <p>${winner.method ? markCards(winner.method) + (winner.turn ? " — turn " + esc(winner.turn) : "") : markCards(result.opening_note || "")}</p></div>
+      <p>${headline ? markCards(headline) + (winner.turn ? " — turn " + esc(winner.turn) : "") : markCards(result.opening_note || "")}</p>
+      ${losses.length ? `<p class="mono" style="margin:4px 0 0;font-size:11px;color:var(--ink3)">${losses.map((l) => markCards(l.replace(" has lost because", " —").replace("life total reached 0", "life hit 0"))).join(" &nbsp;·&nbsp; ")}</p>` : ""}</div>
       <span class="seal-badge">${g.engine === "forge" ? "Engine-tracked zones" : "Decklists verified"}</span></div>
-    <div class="source-strip">${(g.players || []).map((p) => `<span>Player ${esc(p.seat)}: ${esc(p.commander)} · ${(p.cards || {}).mulligans || 0} mulligan${(p.cards || {}).mulligans === 1 ? "" : "s"}${(p.cards || {}).kept_hand ? ` · kept ${esc(p.cards.kept_hand)}` : ""}</span>`).join("")}${g.rules_effective_date ? `<span>CR effective ${esc(g.rules_effective_date)}</span>` : ""}</div>
+    <div class="source-strip">${(g.players || []).map((p) => `<span>${dot(p.seat, 6)} Player ${esc(p.seat)}: ${esc(p.commander)} · ${(p.cards || {}).mulligans || 0} mulligan${(p.cards || {}).mulligans === 1 ? "" : "s"}${(p.cards || {}).kept_hand ? ` · kept ${esc(p.cards.kept_hand)}` : ""}</span>`).join("")}${g.rules_effective_date ? `<span>CR effective ${esc(g.rules_effective_date)}</span>` : ""}</div>
     ${g.engine === "forge" && session.id ? `<p class="match-note" style="margin-top:8px">Receipts: <a href="/api/simulations/${esc(session.id)}/details">per-turn detail (JSON)</a> · <a href="/api/simulations/${esc(session.id)}/forge-log">raw Forge log</a></p>` : ""}
     ${result.opening_note && winner.method ? `<p class="match-note">${markCards(result.opening_note)}</p>` : ""}
     <div style="margin-top:14px">
-      <div class="caps" style="margin-bottom:6px">The game, turn by turn</div>
-      ${turns.map((t) => `<div>
-        <div style="${rowStyle}">
-          <span class="mono" style="font-size:11px;color:var(--ink3);min-width:30px">T${esc(t.turn)}</span>
-          <b style="min-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc((seat(t.seat).commander || "Player " + t.seat).split(",")[0])}</b>
+      <div class="caps" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:baseline;gap:12px">
+        <span>The game, turn by turn</span>
+        ${hasBoard ? `<span class="mono" style="text-transform:none;letter-spacing:0;font-size:10px;color:var(--ink3)">🜨 lands in play · ◈ mana produced · numbers on the right are life</span>` : ""}
+      </div>
+      ${turns.map((t, i) => {
+        // Rows are grouped by game round: the turn number is printed once per
+        // round and the boundary gets a stronger rule, so a whole table-turn
+        // reads as one block instead of four repeating labels.
+        const roundStart = i === 0 || turns[i - 1].turn !== t.turn;
+        return `<div>
+        <div style="${rowStyle}border-top:1px solid rgba(120,90,30,${roundStart ? ".38" : ".10"})">
+          <span class="mono" style="font-size:11px;color:var(--ink3);min-width:30px;font-weight:${roundStart ? 700 : 400}">${roundStart ? "T" + esc(t.turn) : ""}</span>
+          <b style="min-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(seat(t.seat).commander || "")}">${dot(t.seat)} <span class="mono" style="font-size:10.5px;color:${tint(t.seat)};font-weight:600">P${esc(t.seat)}</span> ${esc((seat(t.seat).commander || "Player " + t.seat).split(",")[0])}</b>
           <span style="flex:1">${markCards(t.play)}</span>
-          <span class="mono" style="font-size:11px;color:var(--ink3);white-space:nowrap">${(t.life || []).map(esc).join(" · ")}</span>
+          <span class="mono" style="font-size:11px;color:var(--ink3);white-space:nowrap;display:inline-flex;align-items:baseline;gap:7px">${(t.life || []).map((v, i2) => `<span style="display:inline-flex;align-items:center;gap:3px;${v <= 0 ? "opacity:.4;text-decoration:line-through" : ""}">${dot(i2 + 1, 5)}${esc(v)}</span>`).join("")}</span>
         </div>
         ${boardStrip(t)}
-      </div>`).join("")}
+      </div>`; }).join("")}
     </div>
     <div class="snapshot"><div class="caps">Deck reports — how each build performed</div>
       ${(result.deck_reports || []).map((r) => { const p = seat(r.seat); return `<div style="margin-top:12px">
-        <b>Player ${esc(r.seat)} — ${esc(p.commander || "")}${winner.seat === r.seat ? " 🏆" : ""}</b>
+        <b>${dot(r.seat)} Player ${esc(r.seat)} — ${esc(p.commander || "")}${winner.seat === r.seat ? " 🏆" : ""}</b>
         <p style="margin:4px 0 0">${markCards(r.verdict)}</p>
         ${(r.key_cards || []).length ? `<small style="color:var(--ink3)">Key cards: ${r.key_cards.map((c) => `<span class="card-name" data-card="${esc(c)}">${esc(c)}</span>`).join(", ")}</small>` : ""}
       </div>`; }).join("")}
