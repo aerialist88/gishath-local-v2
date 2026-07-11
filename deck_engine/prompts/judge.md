@@ -28,10 +28,13 @@ Judging criteria, in order:
    this deck should not be another generic staples pile.
 4. Structural soundness: a sane manabase, curve, and enough ramp/draw/interaction to actually
    function. Use the code-computed structural counts in each draft's header as hard evidence
-   here: a draft that is far off the required card count, or far under the land or ramp quota,
-   will burn repair passes that cut cards blindly after your decision — treat that as a real
-   defect when comparing otherwise-close drafts, not a cosmetic one. A deck that cannot cast
-   its commander on time loses regardless of how synergistic its list reads.
+   here: a draft that is far off the required card count, or far outside the role quotas in
+   its header — over on lands/ramp is a defect too, not just under: a flooded list draws mana
+   and nothing to do with it — will burn repair passes that cut cards blindly after your
+   decision — treat that as a real defect when comparing otherwise-close drafts, not a
+   cosmetic one. A deck that cannot cast its commander on time loses regardless of how
+   synergistic its list reads, and a deck far under the draw/interaction/wipe quotas cannot
+   survive three opponents.
 
 Return, via the provided JSON schema:
 - `chosen_draft`: the 1-based number of the winning draft.

@@ -189,6 +189,43 @@ def _top_up_basics(concept: ConceptChoice, cards: list[str], cache: dict) -> tup
     return current + added, added
 
 
+def _quota_scorecard(cards: list[str], cache: dict) -> str:
+    """Code-computed role counts vs config.ROLE_QUOTA_DEFAULTS, rendered as
+    prompt evidence for the judge and optimize stages. Added 2026-07-11 (run
+    b5b10134 post-mortem): every code guard was a FLOOR, so the Necrobloom
+    commission shipped 40 lands (max 38) and 20 ramp (max 12) against 6 draw
+    (min 8) and 1 wipe (min 2) — and optimize, whose explicit job is exactly
+    this balance, had no structural numbers at all. Crude keyword counters
+    (wipe > removal > draw precedence mirrors the tagger; ramp is the same
+    counter the validate tripwire uses; a card counts once) — evidence for the
+    model's judgment, deliberately NOT a hard guard: ceilings enforced by
+    tripwire would buy repair loops, and the two stages that make card-choice
+    judgments can rebalance more cheaply."""
+    q = config.ROLE_QUOTA_DEFAULTS
+    lands = _count_lands(cards, cache)
+    ramp = draw = removal = wipes = 0
+    for name in cards:
+        card = cache.get(str(name).strip().lower())
+        if card is None or "land" in ((card.get("type_line") or "").lower()):
+            continue
+        oracle = scryfall_cache.oracle_text_of(card).lower()
+        if scryfall_cache.is_ramp_card(card):
+            ramp += 1
+        elif any(p in oracle for p in card_tagger._WIPE_PATTERNS):  # noqa: SLF001 — same-package patterns
+            wipes += 1
+        elif any(p in oracle for p in card_tagger._REMOVAL_PATTERNS):  # noqa: SLF001
+            removal += 1
+        elif any(p in oracle for p in card_tagger._DRAW_PATTERNS):  # noqa: SLF001
+            draw += 1
+    return (
+        f"- Lands: {lands} (quota {q['land_min']}-{q['land_max']})\n"
+        f"- Ramp: {ramp} (quota {q['ramp_min']}-{q['ramp_max']})\n"
+        f"- Card draw: {draw} (quota {q['draw_min']}-{q['draw_max']})\n"
+        f"- Interaction/removal: {removal} (quota {q['interaction_min']}-{q['interaction_max']})\n"
+        f"- Board wipes: {wipes} (quota {q['wipes_min']}-{q['wipes_max']})"
+    )
+
+
 def _role_quota_block(quotas: dict) -> str:
     q = {**config.ROLE_QUOTA_DEFAULTS, **(quotas or {})}
     return (
@@ -532,7 +569,6 @@ def _judge(
     build_brief, key_cards, swap_warnings, session_id) — session_id is only used if
     config.RESUME_SESSION_CHAINING is on (T6 scaffolding)."""
     tokens = concept.mechanic_tokens
-    quotas = {**config.ROLE_QUOTA_DEFAULTS}
     blocks = []
     for i, d in enumerate(drafts):
         # Deterministic cleanup + structural counts BEFORE the judge compares:
@@ -542,28 +578,18 @@ def _judge(
         # handed to the judge as evidence, same pattern as the on-mechanic count.
         cards, dupes_removed = _normalize_draft_cards(d.get("cards", []), cache)
         d["cards"] = cards
-        land_count = _count_lands(cards, cache)
-        # Ramp counted the same structural way the validate tripwire counts it —
-        # the judge previously saw land and on-mechanic evidence but nothing for
-        # ramp, the exact dimension that collapsed in runs 7b80666e/3d23a52f.
-        ramp_count = sum(
-            1 for c in cards if scryfall_cache.is_ramp_card(cache.get(str(c).strip().lower()) or {})
-        )
         # Code-computed on-mechanic signal per draft — same counter the S3 synergy
         # gate uses later, handed to the judge as evidence rather than asking it
         # to eyeball 3×99 names for mechanic overlap.
         _, match_count, _ = synergy_check.gate_passes(cards, tokens, cache)
-        structural = (
-            f"{len(cards)} cards (required: {config.DECK_SIZE - 1}), "
-            f"{land_count} lands (quota {quotas['land_min']}-{quotas['land_max']}), "
-            f"{ramp_count} ramp sources (quota {quotas['ramp_min']}-{quotas['ramp_max']})"
-        )
+        structural = f"{len(cards)} cards (required: {config.DECK_SIZE - 1})"
         if dupes_removed:
             structural += f"; {dupes_removed} duplicate cop{'y' if dupes_removed == 1 else 'ies'} already removed in code"
         blocks.append(
             f"Draft {i + 1} — {d.get('angle_name', '?')}\n"
             f"Gameplan: {d.get('gameplan_summary', '')}\n"
             f"Structural counts (code-computed): {structural}\n"
+            f"Role counts vs quota (code-computed, crude keyword counts):\n{_quota_scorecard(cards, cache)}\n"
             f"On-mechanic count (code-computed): {match_count} of {len(cards)} cards\n"
             f"Key cards' real printed text:\n{_oracle_text_block(cache, d.get('key_cards', []))}\n"
             f"Decklist ({len(cards)} cards):\n" + "\n".join(f"- {c}" for c in cards)
@@ -666,7 +692,7 @@ def _validate_and_repair(
 
 def _optimize(
     run_id: str, concept: ConceptChoice, build_brief: str, cards: list[str],
-    key_cards_oracle_text: str, attempt: int, resume_session_id: str | None = None,
+    key_cards_oracle_text: str, cache: dict, attempt: int, resume_session_id: str | None = None,
 ) -> tuple[dict, str]:
     prompt = prompt_helpers.render(
         "optimize.md",
@@ -675,6 +701,7 @@ def _optimize(
         commander_oracle_text=concept.oracle_text or "(no oracle text on file for this card)",
         key_cards_oracle_text=key_cards_oracle_text,
         current_decklist_block="\n".join(f"- {c}" for c in cards),
+        role_scorecard=_quota_scorecard(cards, cache),
         deck_size_minus_1=config.DECK_SIZE - 1,
         **prompt_helpers.bracket_rules_text(),
     )
@@ -849,7 +876,7 @@ def _run_one_attempt(
     # equivalent now is judge -> optimize (the judge has already seen every
     # draft and wrote the brief optimize fact-checks against).
     optimized, optimize_session_id = _optimize(
-        run_id, concept, build_brief, cards, key_cards_oracle_text, attempt,
+        run_id, concept, build_brief, cards, key_cards_oracle_text, cache, attempt,
         resume_session_id=judge_session_id,
     )
 

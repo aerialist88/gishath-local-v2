@@ -249,10 +249,13 @@ THINKING_BUDGET_BY_MODEL: dict = {
 # draft-repair rounds (pre-diet often none), the synergy gate fired on 3 of 5
 # (vs 4 of 25 before), and two runs died in validation outright. Draft is
 # where thinking demonstrably bought deck quality, so it alone gets a budget
-# back: 3 drafters x 10k ≈ +$0.45/run on sonnet, cheap against a $1.74 failed
-# run or a gutted commission. Other stages stay on the per-model (diet) rules.
+# back. Other stages stay on the per-model (diet) rules.
+# 10000 -> 6000 (2026-07-11, run b5b10134): 10k overshot — drafts emitted
+# 24-30k output tokens, MORE than the pre-diet era, and the run cost $3.51 vs
+# the $2.88 baseline. 6000 is the budget the pre-diet drafts actually ran on;
+# it bought the zero-repair structural soundness without the overage.
 THINKING_BUDGET_BY_STAGE: dict = {
-    "draft": int(os.environ.get("DECK_ENGINE_THINKING_DRAFT_TOKENS", "10000")),
+    "draft": int(os.environ.get("DECK_ENGINE_THINKING_DRAFT_TOKENS", "6000")),
 }
 
 # Claude CLI binary — override via env if `claude` isn't on PATH in the

@@ -13,6 +13,10 @@ $key_cards_oracle_text
 This decklist has passed legality/singleton/color-identity validation:
 $current_decklist_block
 
+Code-computed role counts for this decklist against the deck's role quotas (crude keyword
+counts — treat as evidence, not gospel):
+$role_scorecard
+
 You have two jobs this pass, in order:
 
 1. FACT-CHECK FIRST. Compare the build brief's claimed gameplan/synergies against the real
@@ -27,6 +31,21 @@ You have two jobs this pass, in order:
    (two-card infinite combos are backup wincons only, never the primary gameplan; mass land
    destruction excluded). Make small targeted swaps only where they clearly improve the deck's
    consistency or power-level fit for the bracket — do not rebuild wholesale.
+
+   Use the role scorecard above as hard evidence here: a deck sitting OVER the land/ramp
+   quotas while UNDER the draw/interaction/wipe quotas is flooded — it will draw mana and
+   nothing to do with it, and it cannot answer three opponents' boards. Rebalance with your
+   swaps: trade the most redundant excess-mana slots (the third and fourth copy of the same
+   effect) for the missing draw, removal, or sweepers. Respect the deck's mechanic while doing
+   so — in a lands-matter deck, extra land drops are theme, so cut the most generic surplus
+   first, and prefer replacements that serve double duty with the commander's mechanic.
+
+   Also check for ORPHANED support cards: any card whose payoff depends on a package this
+   deck does not actually contain — Food/Treasure/Blood/Clue payoffs without producers,
+   discard payoffs without discard outlets, typal payoffs with too few creatures of the type,
+   "whenever you sacrifice" cards without sacrifice fodder or outlets. One incidental enabler
+   is not a package. Swap orphans for cards whose support genuinely exists in this list; note
+   them in changes_made as orphan cuts.
 
    Also review SYNERGY DENSITY as part of this pass: does this decklist actually lean into
    $commander's specific mechanic (per the oracle text above), or does it read more like a

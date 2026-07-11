@@ -43,6 +43,13 @@ $role_quota_block
 Include an appropriate mana base, ramp, card draw, interaction/removal, and win conditions
 consistent with your angle and the bracket house rules.
 
+Avoid habit includes — cards that need support this deck doesn't actually have. Path of
+Ancestry is the canonical trap: a tapped land whose scry needs a real typal overlap with the
+commander, which most decks don't have — take an untapped land or a basic instead. The same
+test applies to any "value" land or support card: token-type payoffs (Food/Treasure/Clue)
+without producers, discard payoffs without outlets, typal payoffs without the tribe. If its
+value depends on a package you aren't running, it's filler, not value.
+
 This deck must be built around $commander's specific mechanic (per the oracle text above), not
 just its color identity — at least $on_mechanic_min of your card choices should meaningfully
 interact with that mechanic: enable it, trigger it more often, or capitalize on what it produces.

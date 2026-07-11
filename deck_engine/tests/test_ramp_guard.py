@@ -13,8 +13,8 @@ from __future__ import annotations
 import sys
 from unittest import mock
 
-from .. import claude_cli, config
-from ..agent_pipeline import _ramp_protected_names, _veto_ramp_swaps
+from .. import claude_cli, config, prompt_helpers
+from ..agent_pipeline import _quota_scorecard, _ramp_protected_names, _veto_ramp_swaps
 from ..scryfall_cache import is_ramp_card, validate_deck
 
 _CACHE = {
@@ -47,6 +47,9 @@ _CACHE = {
     "grizzly bears": {"name": "Grizzly Bears", "type_line": "Creature — Bear",
                       "color_identity": ["G"], "legalities": {"commander": "legal"},
                       "oracle_text": "", "mana_cost": "{1}{G}"},
+    "day of judgment": {"name": "Day of Judgment", "type_line": "Sorcery", "color_identity": ["W"],
+                        "legalities": {"commander": "legal"},
+                        "oracle_text": "Destroy all creatures.", "mana_cost": "{2}{W}{W}"},
 }
 
 
@@ -130,6 +133,29 @@ def test_ramp_protection_and_swap_vetoes() -> list[str]:
     return problems
 
 
+def test_quota_scorecard_counts_and_renders() -> list[str]:
+    problems = []
+    cards = ["Forest", "Sol Ring", "Counterspell", "Opt", "Day of Judgment", "Grizzly Bears",
+             "Unknown Mystery Card"]
+    scorecard = _quota_scorecard(cards, _CACHE)
+    q = config.ROLE_QUOTA_DEFAULTS
+    expectations = [
+        f"- Lands: 1 (quota {q['land_min']}-{q['land_max']})",
+        f"- Ramp: 1 (quota {q['ramp_min']}-{q['ramp_max']})",
+        f"- Card draw: 1 (quota {q['draw_min']}-{q['draw_max']})",
+        f"- Interaction/removal: 1 (quota {q['interaction_min']}-{q['interaction_max']})",
+        f"- Board wipes: 1 (quota {q['wipes_min']}-{q['wipes_max']})",
+    ]
+    for line in expectations:
+        if line not in scorecard:
+            problems.append(f"missing/incorrect scorecard line {line!r} in:\n{scorecard}")
+    # optimize.md must actually consume the $role_scorecard placeholder.
+    rendered = prompt_helpers.render("optimize.md", role_scorecard=scorecard)
+    if "$role_scorecard" in rendered or "- Board wipes: 1" not in rendered:
+        problems.append("optimize.md did not substitute the role scorecard")
+    return problems
+
+
 def test_thinking_budget_stage_resolution() -> list[str]:
     problems = []
     with mock.patch.object(config, "THINKING_BUDGET_BY_STAGE", {"draft": 10000}), \
@@ -154,6 +180,7 @@ def main() -> int:
         test_is_ramp_card_classification,
         test_validate_deck_ramp_tripwire_and_notes,
         test_ramp_protection_and_swap_vetoes,
+        test_quota_scorecard_counts_and_renders,
         test_thinking_budget_stage_resolution,
     ]
     all_problems: dict[str, list[str]] = {}
