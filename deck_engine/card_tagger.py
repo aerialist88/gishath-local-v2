@@ -34,7 +34,7 @@ _RAMP_PATTERNS = (
 _REMOVAL_PATTERNS = (
     "destroy target", "exile target", "deals damage to target creature",
     "deals damage to any target", "-x/-x", "sacrifice a creature",
-    "return target creature", "counter target spell", "target creature gets -",
+    "return target creature", "counter target", "target creature gets -",
 )
 _WIPE_PATTERNS = (
     "destroy all creatures", "each creature gets -", "exile all creatures",
@@ -86,10 +86,14 @@ def _heuristic_tag(card: dict) -> tuple[str, str] | None:
         return "Land/Mana base", "early"
     if any(p in oracle for p in _WIPE_PATTERNS):
         return "Board wipe", "mid"
-    if any(p in oracle for p in _RAMP_PATTERNS):
-        return "Ramp", "early"
+    # Removal outranks ramp: interaction spells routinely carry ramp-shaped
+    # side text (An Offer You Can't Refuse's Treasure reminder text, Path to
+    # Exile's opponent land fetch) and were shipping tagged "Ramp" — run
+    # 3d23a52f's Stats sheet counted a counterspell among its 2 ramp sources.
     if any(p in oracle for p in _REMOVAL_PATTERNS):
         return "Removal", "mid"
+    if any(p in oracle for p in _RAMP_PATTERNS):
+        return "Ramp", "early"
     if any(p in oracle for p in _DRAW_PATTERNS):
         return "Card draw", "mid"
     return None

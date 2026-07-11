@@ -166,10 +166,12 @@ ROLE_QUOTA_DEFAULTS: dict = {
 # false negatives; this is a backstop against egregious goodstuff piles, not
 # the primary quality mechanism). Tunable without a code change.
 SYNERGY_GATE_THRESHOLD: int = int(os.environ.get("DECK_ENGINE_SYNERGY_GATE_THRESHOLD", "25"))
-# 2 -> 1 (2026-07-10): the gate fired on 3 of the last 7 runs (vs the "<1 in 5"
-# design target) and each attempt is a draft-scale spend. One attempt keeps the
-# backstop; the ship-best-effort fallback below it is unchanged.
-MAX_SYNERGY_REPAIR_ATTEMPTS: int = int(os.environ.get("DECK_ENGINE_MAX_SYNERGY_REPAIR_ATTEMPTS", "1"))
+# 2 -> 1 (2026-07-10 token diet) -> back to 2 (2026-07-11): the diet cut this
+# to 1 while the gate was firing on 3 of 7 runs, i.e. repair capacity halved
+# exactly when it was needed most, and post-diet decks shipped goodstuff-adjacent
+# (Xanathar review). Post-T3 an attempt is swap-deltas, not a full regurgitation
+# (~$0.10-0.20, not draft-scale), so the second attempt is cheap insurance.
+MAX_SYNERGY_REPAIR_ATTEMPTS: int = int(os.environ.get("DECK_ENGINE_MAX_SYNERGY_REPAIR_ATTEMPTS", "2"))
 
 # ── PRD v4 amendment §3.4 — budget pass ──────────────────────────────────────
 # Per-card cap only — Trevor's explicit call (2026-07-03): NO total-deck cap;
@@ -237,6 +239,20 @@ THINKING_BUDGET_BY_MODEL: dict = {
     "haiku": int(os.environ.get("DECK_ENGINE_THINKING_HAIKU_TOKENS", str(THINKING_BUDGET_TOKENS))),
     "sonnet": int(os.environ.get("DECK_ENGINE_THINKING_SONNET_TOKENS", "0")),
     "opus": int(os.environ.get("DECK_ENGINE_THINKING_OPUS_TOKENS", "0")),
+}
+
+# Per-STAGE thinking budgets, keyed by model tier key — outranks the per-model
+# entry above (claude_cli.run resolves stage -> model -> global). Added
+# 2026-07-11: the diet's blanket sonnet/opus thinking cut collapsed each
+# drafter's output from 22-27k tokens to 3.5-5k, and the five post-diet
+# commissions all showed the cost of that lost deliberation — every run burned
+# draft-repair rounds (pre-diet often none), the synergy gate fired on 3 of 5
+# (vs 4 of 25 before), and two runs died in validation outright. Draft is
+# where thinking demonstrably bought deck quality, so it alone gets a budget
+# back: 3 drafters x 10k ≈ +$0.45/run on sonnet, cheap against a $1.74 failed
+# run or a gutted commission. Other stages stay on the per-model (diet) rules.
+THINKING_BUDGET_BY_STAGE: dict = {
+    "draft": int(os.environ.get("DECK_ENGINE_THINKING_DRAFT_TOKENS", "10000")),
 }
 
 # Claude CLI binary — override via env if `claude` isn't on PATH in the

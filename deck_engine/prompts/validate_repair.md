@@ -13,10 +13,14 @@ Fix ONLY the issues listed above, as targeted deltas — do NOT return the whole
   Commander-legal card inside the commander's color identity. `remove` must match a name in
   the decklist above exactly.
 - **cuts** — remove cards when the deck is over $deck_size_minus_1. Cut the weakest,
-  most off-plan cards first, and never cut lands to fix a count problem. Each entry removes
-  one copy, so a duplicate is fixed by cutting the name once.
+  most off-plan cards first, and never cut lands or ramp to fix a count problem. Each entry
+  removes one copy, so a duplicate is fixed by cutting the name once.
 - **adds** — add cards when the deck is under $deck_size_minus_1, or when the notes say the
   mana base is short. Basic lands in the commander's colors are always safe adds.
+
+When the notes say the deck is short on RAMP, fix it with **swaps**: replace the weakest
+non-ramp, nonland cards with efficient mana rocks, mana dorks, or land-ramp spells in the
+commander's color identity — never cut lands to make room for ramp.
 
 Make the arithmetic work: $card_count current + adds − cuts must equal exactly
 $deck_size_minus_1 (swaps don't change the count).

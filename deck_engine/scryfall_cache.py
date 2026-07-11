@@ -281,6 +281,41 @@ def load_cache(path: Path = config.SCRYFALL_CACHE_PATH) -> dict[str, dict]:
 
 # ── Validation ────────────────────────────────────────────────────────────────
 
+# Structural ramp detection (2026-07-11, Xanathar/Hraesvelgr post-mortem): after
+# the land tripwire went in, the mana base's CARD count recovered but its ramp
+# collapsed — run 7b80666e shipped 4 ramp sources under a 6-mana commander and
+# run 3d23a52f shipped 1 under a 5-mana one, against a 10-12 quota and a 7-16
+# range across every healthy deck before them. Counted from oracle text, NOT
+# card_tagger role tags: the tagger is deliberately over-inclusive presentation
+# metadata (it has tagged counterspells "Ramp" off Treasure reminder text) and
+# a guard must not inherit its false positives, so this stays an independent,
+# deliberately crude matcher — calibrated against all 30 shipped decks; keep
+# its behaviour stable or re-run that calibration before changing patterns.
+_RAMP_MANA_PATTERNS = (
+    "add {", "add one mana", "add two mana", "add three mana",
+    "add mana of any", "add an amount of mana", "add a mana",
+)
+_RAMP_LAND_FETCH_PATTERNS = ("land card", "onto the battlefield")  # ALL must match
+_RAMP_EXTRA_LAND_PATTERNS = ("additional land",)
+
+
+def is_ramp_card(card: dict) -> bool:
+    """True if this NONLAND card structurally reads as a mana source: produces
+    mana (rocks/dorks/rituals — reminder text included, so Treasure-makers
+    count), puts land cards onto the battlefield, or grants extra land drops.
+    Crude by design (see the calibration note above): a few false positives are
+    tolerable in a tripwire; what matters is that a deck with a healthy ramp
+    suite always clears the floor and a gutted one never does."""
+    if "land" in ((card.get("type_line") or "").lower()):
+        return False
+    oracle = (card.get("oracle_text") or "").lower()
+    if any(p in oracle for p in _RAMP_MANA_PATTERNS):
+        return True
+    if all(p in oracle for p in _RAMP_LAND_FETCH_PATTERNS):
+        return True
+    return any(p in oracle for p in _RAMP_EXTRA_LAND_PATTERNS)
+
+
 @dataclass
 class ValidationResult:
     commander: str
@@ -299,6 +334,14 @@ class ValidationResult:
     # (the tripwire) and the model treated that floor as the target. 0 = message
     # falls back to min_lands.
     land_target: int = 0
+    # Ramp tripwire — same design as the land one (fires at min_ramp, message
+    # targets ramp_target), counted structurally via is_ramp_card(), never from
+    # role tags. Added 2026-07-11 after runs 7b80666e/3d23a52f shipped 4 and 1
+    # ramp sources against the 10-12 quota.
+    ramp_count: int = 0
+    min_ramp: int = 0              # floor requested by the caller; 0 = ramp check not requested
+    too_few_ramp: bool = False
+    ramp_target: int = 0
 
     @property
     def is_valid(self) -> bool:
@@ -309,6 +352,7 @@ class ValidationResult:
             or self.singleton_violations
             or self.wrong_card_count
             or self.too_few_lands
+            or self.too_few_ramp
         )
 
     def as_repair_notes(self) -> str:
@@ -333,6 +377,15 @@ class ValidationResult:
                 f"in the commander's colors (cutting the weakest nonland cards) until the deck has "
                 f"at least {target} lands."
             )
+        if self.too_few_ramp:
+            target = max(self.ramp_target, self.min_ramp)
+            lines.append(
+                f"- Only {self.ramp_count} ramp sources (mana rocks/dorks, land-ramp spells, extra "
+                f"land drops) — far too few to cast the commander and the deck's top end on time. "
+                f"Swap the weakest non-ramp, nonland cards for efficient ramp in the commander's "
+                f"colors (e.g. Signets/Talismans, two-mana land-ramp sorceries) until the deck has "
+                f"at least {target} ramp sources. Do NOT cut lands to make room."
+            )
         return "\n".join(lines)
 
 
@@ -345,7 +398,8 @@ def _is_singleton_exempt(card: dict) -> bool:
 
 
 def validate_deck(commander: str, decklist: list[str], cache: dict[str, dict] | None = None,
-                  min_lands: int = 0, land_target: int = 0) -> ValidationResult:
+                  min_lands: int = 0, land_target: int = 0,
+                  min_ramp: int = 0, ramp_target: int = 0) -> ValidationResult:
     """Validate a 99-card decklist against `commander`.
 
     Args:
@@ -360,10 +414,16 @@ def validate_deck(commander: str, decklist: list[str], cache: dict[str, dict] | 
                    catastrophic loss, not quota enforcement.
         land_target: land count the repair message tells the model to reach (the real quota
                    floor), so the tripwire never doubles as the target. 0 = use min_lands.
+        min_ramp:  if > 0, flag the deck when fewer than this many nonland cards read as ramp
+                   (is_ramp_card). Same tripwire-not-quota philosophy as min_lands: runs
+                   7b80666e/3d23a52f shipped 4 and 1 ramp sources against a 10-12 quota while
+                   every healthy deck before them carried 7-16.
+        ramp_target: ramp count the repair message targets. 0 = use min_ramp.
     """
     cache = cache if cache is not None else load_cache()
     result = ValidationResult(commander=commander, card_count=len(decklist) + 1,
-                              min_lands=min_lands, land_target=land_target)
+                              min_lands=min_lands, land_target=land_target,
+                              min_ramp=min_ramp, ramp_target=ramp_target)
 
     commander_card = cache.get(commander.strip().lower())
     commander_identity = set(commander_card.get("color_identity", [])) if commander_card else set()
@@ -386,6 +446,8 @@ def validate_deck(commander: str, decklist: list[str], cache: dict[str, dict] | 
 
         if "land" in (card.get("type_line") or "").lower():
             result.land_count += 1
+        elif is_ramp_card(card):
+            result.ramp_count += 1
 
         legality = (card.get("legalities") or {}).get("commander", "not_legal")
         if legality == "banned":
@@ -405,6 +467,8 @@ def validate_deck(commander: str, decklist: list[str], cache: dict[str, dict] | 
 
     if min_lands > 0 and result.land_count < min_lands:
         result.too_few_lands = True
+    if min_ramp > 0 and result.ramp_count < min_ramp:
+        result.too_few_ramp = True
 
     return result
 

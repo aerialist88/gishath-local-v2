@@ -22,6 +22,11 @@ support like removal/draw the deck still needs) — this is a targeted tightenin
 wholesale rebuild. Not every generic card needs replacing; use judgement on how many swaps
 actually improve the deck without gutting its functional shell.
 
+NEVER swap out lands, mana rocks, mana dorks, land-ramp spells, or extra-land-drop effects —
+they read as "generic" to a keyword check precisely because ramp serves every deck, but a deck
+that can't cast its commander on time loses before synergy ever matters. (Swaps that remove a
+ramp source without adding one back are vetoed in code and wasted.)
+
 Respond only via the provided JSON schema: a `swaps` list of targeted changes, each with the
 exact printed name of the card to `remove` (as it appears in the decklist above), the exact
 printed name of the card to `add`, and a short `reason`. Do NOT return the rest of the

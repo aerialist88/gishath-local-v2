@@ -249,6 +249,22 @@ def _track_stream_stats(event: dict, stats: dict) -> None:
         pass
 
 
+def _resolve_thinking_budget(model_tier_key: str, model: str) -> int:
+    """Thinking budget for one call: per-stage (config.THINKING_BUDGET_BY_STAGE,
+    keyed by model tier key) > per-model (THINKING_BUDGET_BY_MODEL) > global
+    (THINKING_BUDGET_TOKENS). The stage layer exists so draft — where the
+    2026-07-10 diet's blanket sonnet thinking cut demonstrably cost deck
+    quality (see config's THINKING_BUDGET_BY_STAGE note) — gets its budget
+    back without re-enabling thinking for every other sonnet call. Never
+    negative; sonnet/opus thinking is redacted on the wire and bills as
+    output tokens, so a stage entry is a deliberate spend decision."""
+    stage_budgets = getattr(config, "THINKING_BUDGET_BY_STAGE", None) or {}
+    if model_tier_key in stage_budgets:
+        return max(0, int(stage_budgets[model_tier_key]))
+    budgets = getattr(config, "THINKING_BUDGET_BY_MODEL", None) or {}
+    return max(0, int(budgets.get(model, getattr(config, "THINKING_BUDGET_TOKENS", 0) or 0)))
+
+
 def run(
     prompt: str,
     *,
@@ -333,17 +349,12 @@ def run(
 
     # Extended thinking: the CLI reads MAX_THINKING_TOKENS from its environment
     # (no dedicated flag) — set it per-subprocess so nothing leaks into the
-    # parent process or any other tool this app shells out to. Budget is
-    # per-model (config.THINKING_BUDGET_BY_MODEL): sonnet/opus default 0 —
-    # their thinking is redacted on the wire, so it billed as output tokens
-    # while showing only a ticking counter next to the narration the prompts
-    # already demand. ALWAYS exported, "0" included: the old
-    # `env=None when budget == 0` path inherited the parent environment, so a
-    # configured 0 deferred to the CLI's own default instead of reliably
-    # disabling thinking.
-    budgets = getattr(config, "THINKING_BUDGET_BY_MODEL", None) or {}
-    thinking_budget = int(budgets.get(model, getattr(config, "THINKING_BUDGET_TOKENS", 0) or 0))
-    env = {**os.environ, "MAX_THINKING_TOKENS": str(max(0, thinking_budget))}
+    # parent process or any other tool this app shells out to. ALWAYS exported,
+    # "0" included: the old `env=None when budget == 0` path inherited the
+    # parent environment, so a configured 0 deferred to the CLI's own default
+    # instead of reliably disabling thinking. Budget resolution lives in
+    # _resolve_thinking_budget().
+    env = {**os.environ, "MAX_THINKING_TOKENS": str(_resolve_thinking_budget(model_tier_key, model))}
 
     try:
         proc = subprocess.Popen(

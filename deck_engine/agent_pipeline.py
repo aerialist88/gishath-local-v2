@@ -601,13 +601,22 @@ def _validate_and_repair(
 
     Before validating (and again after each repair application), an undercount
     deck short on lands is topped up with pip-weighted basics in code —
-    _top_up_basics() — so no model call is ever spent asking for basic lands."""
+    _top_up_basics() — so no model call is ever spent asking for basic lands.
+
+    The ramp tripwire (2026-07-11) mirrors the land one: fires at ramp_min - 3
+    (calibrated: every healthy shipped deck counted 7-16 structural ramp; the
+    two gutted ones counted 4 and 1), messages target ramp_min itself. Unlike
+    lands there's no code-level top-up — choosing WHICH rocks/dorks fit the
+    deck is a quality judgment, so the fix rides the normal repair prompt."""
     land_min = int(config.ROLE_QUOTA_DEFAULTS.get("land_min", 0))
     min_lands = max(0, land_min - 2)
+    ramp_min = int(config.ROLE_QUOTA_DEFAULTS.get("ramp_min", 0))
+    min_ramp = max(0, ramp_min - 3)
 
     def _validate(deck_cards: list[str]) -> ValidationResult:
         return scryfall_cache.validate_deck(concept.commander, deck_cards, cache=cache,
-                                            min_lands=min_lands, land_target=land_min)
+                                            min_lands=min_lands, land_target=land_min,
+                                            min_ramp=min_ramp, ramp_target=ramp_min)
 
     current, added_basics = _top_up_basics(concept, cards, cache)
     if added_basics:
@@ -676,6 +685,44 @@ def _optimize(
     return parsed, result.session_id
 
 
+def _ramp_protected_names(cards: list[str], cache: dict) -> set[str]:
+    """Lower-cased names of the deck's ramp cards, when they must be protected
+    from synergy-repair swaps — i.e. whenever the deck holds no ramp surplus
+    (structural count <= ramp_max). Ramp almost never matches mechanic tokens,
+    so the synergy gate reads the entire ramp suite as generic filler and
+    offers it up as swap candidates — that is exactly how runs 7b80666e and
+    3d23a52f shipped 4 and 1 ramp sources against a 10-12 quota. With a real
+    surplus, cutting into it is legitimate, so no names are protected then."""
+    ramp_max = int(config.ROLE_QUOTA_DEFAULTS.get("ramp_max", 0))
+    ramp = [c for c in cards
+            if scryfall_cache.is_ramp_card(cache.get(str(c).strip().lower()) or {})]
+    if ramp_max > 0 and len(ramp) > ramp_max:
+        return set()
+    return {c.strip().lower() for c in ramp}
+
+
+def _veto_ramp_swaps(cards: list[str], swaps: list[dict], cache: dict) -> tuple[list[dict], list[str]]:
+    """Code-level backstop on top of the prompt instruction: drop any synergy
+    swap that removes a protected ramp card without adding ramp back. Returns
+    (kept_swaps, warnings)."""
+    protected = _ramp_protected_names(cards, cache)
+    if not protected:
+        return list(swaps), []
+    kept: list[dict] = []
+    warnings: list[str] = []
+    for swap in swaps:
+        remove_key = str(swap.get("remove", "")).strip().lower()
+        add_card = cache.get(str(swap.get("add", "")).strip().lower())
+        if remove_key in protected and not (add_card is not None and scryfall_cache.is_ramp_card(add_card)):
+            warnings.append(
+                f"vetoed synergy swap removing ramp card {swap.get('remove')!r} — the deck has "
+                f"no ramp surplus and the replacement {swap.get('add')!r} isn't ramp."
+            )
+            continue
+        kept.append(swap)
+    return kept, warnings
+
+
 def _synergy_gate_and_repair(
     run_id: str, concept: ConceptChoice, cards: list[str], existing_validation: ValidationResult,
     cache: dict, stage_prefix: str,
@@ -695,6 +742,11 @@ def _synergy_gate_and_repair(
     current = cards
     validation = existing_validation
     for attempt in range(1, config.MAX_SYNERGY_REPAIR_ATTEMPTS + 1):
+        # Ramp never matches mechanic tokens, so without this filter the whole
+        # ramp suite lands in the swap-candidate list (see _ramp_protected_names).
+        protected = _ramp_protected_names(current, cache)
+        if protected:
+            generic = [c for c in generic if c.strip().lower() not in protected]
         prompt = prompt_helpers.render(
             "synergy_repair.md",
             commander=concept.commander, color_identity=", ".join(concept.color_identity) or "colorless",
@@ -712,9 +764,12 @@ def _synergy_gate_and_repair(
         )
         # T3 (2026-07-10): swap deltas applied in code, not a regurgitated full
         # list. Malformed swaps are warnings, and the Scryfall repair loop below
-        # re-validates the applied result either way.
-        current, swap_warnings = _apply_swaps(current, result.parsed_json().get("swaps", []))
-        for warning in swap_warnings:
+        # re-validates the applied result either way. Ramp-stripping swaps are
+        # vetoed in code first — the prompt forbids them, but the veto is what
+        # makes the rule hold.
+        proposed_swaps, veto_warnings = _veto_ramp_swaps(current, result.parsed_json().get("swaps", []), cache)
+        current, swap_warnings = _apply_swaps(current, proposed_swaps)
+        for warning in veto_warnings + swap_warnings:
             _log(f"{stage_prefix}: synergy repair {attempt} — {warning}")
         current, validation = _validate_and_repair(
             run_id, concept, current, cache,
