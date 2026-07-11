@@ -4,7 +4,7 @@ face of the real Kamigawa: Neon Dynasty MDFC "The Fall of Lord Konda //
 Fragment of Konda") was spuriously flagged as unknown/hallucinated by
 validate_deck(), because refresh_cache() only indexed Scryfall's combined
 "Front // Back" name. Fixed by also indexing the front face alone. This test
-builds a cache the same way refresh_cache() does (from a raw Scryfall-shaped
+builds the cache with the real _trim_bulk_cards() (from a raw Scryfall-shaped
 card list) rather than hand-building the trimmed dict, so it actually
 exercises the indexing fix, not just validate_deck()'s lookup.
 
@@ -50,22 +50,11 @@ _FAKE_RAW_CARDS = [
 ]
 
 
-def _build_trimmed_cache_like_refresh_cache(raw_cards: list[dict]) -> dict[str, dict]:
-    """Mirrors refresh_cache()'s trimming/indexing loop without touching the network."""
-    trimmed: dict[str, dict] = {}
-    for card in raw_cards:
-        name = card.get("name", "").strip()
-        key = name.lower()
-        entry = {f: card.get(f) for f in scryfall_cache._KEEP_FIELDS}  # noqa: SLF001 — test-only introspection
-        trimmed[key] = entry
-        if " // " in name:
-            front_key = name.split(" // ", 1)[0].strip().lower()
-            trimmed.setdefault(front_key, entry)
-    return trimmed
-
-
 def main() -> int:
-    cache = _build_trimmed_cache_like_refresh_cache(_FAKE_RAW_CARDS)
+    # The real trimming/indexing function, no network involved. (This used to
+    # mirror refresh_cache()'s inline loop and had already drifted from it —
+    # the loop is now extracted precisely so tests exercise the real thing.)
+    cache = scryfall_cache._trim_bulk_cards(_FAKE_RAW_CARDS)  # noqa: SLF001 — test-only introspection
 
     checks = [
         ("full combined name still resolves", "the fall of lord konda // fragment of konda" in cache),

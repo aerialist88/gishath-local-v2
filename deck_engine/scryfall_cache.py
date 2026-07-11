@@ -66,6 +66,36 @@ _KEEP_FIELDS = (
     "layout", "oracle_id", "cmc", "mana_cost", "rarity", "image_uris", "card_faces",
 )
 
+# Scryfall's default_cards bulk file also carries objects that are not deck
+# cards at all. Two classes get skipped during the trim:
+#
+#   layout — art-series cards, tokens, emblems, and the supplemental-format
+#   card types (planes, schemes, vanguards, phenomena) can never appear in a
+#   Commander decklist, and several of them share names with real cards.
+#   Confirmed real incident 2026-07-11: the LCI art-series card "Pantlaza,
+#   Sun-Favored // Pantlaza, Sun-Favored" (layout art_series, type_line
+#   "Card // Card", no oracle text) appeared in the bulk file before the real
+#   Pantlaza, so its front-face alias claimed the "pantlaza, sun-favored" key
+#   and the first-printing-wins dedupe then dropped the real card entirely —
+#   a deck was built and validated against a blank collector card. The same
+#   scan found 666 art-series shadows ("Clearwater Pathway", ...), plus
+#   hundreds of token/emblem entries squatting on plain-name keys.
+#
+#   set_type "memorabilia" — gold-bordered World Championship reprints etc.
+#   share names with real cards but carry layout "normal", so the layout skip
+#   alone wouldn't stop one from claiming a real card's key. (set_type isn't
+#   in _KEEP_FIELDS; it's only inspected during the trim, never stored.)
+_SKIP_LAYOUTS = {
+    "art_series", "token", "double_faced_token", "emblem",
+    "planar", "scheme", "vanguard", "phenomenon",
+}
+_SKIP_SET_TYPES = {"memorabilia"}
+
+# Bump when the trim/skip rules above (or _trim_bulk_cards itself) change, so
+# refresh_if_stale() treats caches built under the old rules as stale
+# regardless of age — same reasoning as the "keep_fields" stamp below.
+_TRIM_SCHEMA = 2
+
 # Basic lands (incl. Wastes and their Snow- variants) are singleton-exempt.
 _BASIC_LAND_NAMES = {
     "plains", "island", "swamp", "mountain", "forest", "wastes",
@@ -100,6 +130,56 @@ def _find_default_cards_uri(bulk_index: dict) -> str:
     raise RuntimeError("Scryfall bulk-data index had no 'default_cards' entry — API contract may have changed.")
 
 
+def _trim_bulk_cards(raw_cards: list[dict]) -> dict[str, dict]:
+    """Trim a raw Scryfall default_cards list into the lookup dict we cache.
+
+    Skips non-deck objects (_SKIP_LAYOUTS / _SKIP_SET_TYPES) so they can never
+    claim a real card's name key — see the 2026-07-11 Pantlaza incident on the
+    constants above.
+    """
+    trimmed: dict[str, dict] = {}
+
+    def _put(key: str, entry: dict) -> None:
+        # First printing seen wins (legality/color-identity don't vary by
+        # printing) — except that an entry with no type_line never holds a key
+        # against one that has real card data. reversible_card printings
+        # (double-sided Secret Lair reprints, named "X // X" with all game
+        # data nested in card_faces and top-level type_line/oracle_text null)
+        # otherwise shadow the real card whenever the bulk file happens to
+        # list them first — confirmed 2026-07-11 on 13 live keys, including
+        # "Anointed Procession" and "Anje Falkenrath".
+        incumbent = trimmed.get(key)
+        if incumbent is None or (not incumbent.get("type_line") and entry.get("type_line")):
+            trimmed[key] = entry
+
+    for card in raw_cards:
+        name = card.get("name", "").strip()
+        if not name:
+            continue
+        if card.get("layout") in _SKIP_LAYOUTS or card.get("set_type") in _SKIP_SET_TYPES:
+            continue
+        entry = {f: card.get(f) for f in _KEEP_FIELDS}
+        _put(name.lower(), entry)
+
+        # MDFCs (modal double-faced Sagas, transform creatures, etc.) get a
+        # top-level `name` of "Front // Back" from Scryfall's bulk data — but
+        # decklists (Moxfield, EDHREC, and every human deckbuilder) refer to
+        # them by the front face's name alone. Without this, validate_deck()
+        # spuriously flags real, legal cards as "not found on Scryfall (likely
+        # hallucinated)" (confirmed real incident 2026-07-01: "The Fall of
+        # Lord Konda" flagged unknown on the first repair pass; only passed
+        # on the second because the repair agent happened to recall the exact
+        # "// Fragment of Konda" suffix from training data — a lucky,
+        # unverifiable guess in a headless run with no live Scryfall access,
+        # not a real fix). _put() keeps first-wins semantics here, so a
+        # genuine distinct single-faced card never gets silently shadowed by
+        # an MDFC's front-face alias.
+        if " // " in name:
+            _put(name.split(" // ", 1)[0].strip().lower(), entry)
+
+    return trimmed
+
+
 def refresh_cache(force: bool = False) -> int:
     """Download the latest Scryfall default_cards bulk file and rebuild the local cache.
 
@@ -117,32 +197,7 @@ def refresh_cache(force: bool = False) -> int:
 
     raw_cards = _http_get_json(download_uri, timeout=180.0)
 
-    trimmed: dict[str, dict] = {}
-    for card in raw_cards:
-        name = card.get("name", "").strip()
-        if not name:
-            continue
-        key = name.lower()
-        if key in trimmed:
-            continue  # keep first printing seen; legality/color-identity don't vary by printing
-        entry = {f: card.get(f) for f in _KEEP_FIELDS}
-        trimmed[key] = entry
-
-        # MDFCs (modal double-faced Sagas, transform creatures, etc.) get a
-        # top-level `name` of "Front // Back" from Scryfall's bulk data — but
-        # decklists (Moxfield, EDHREC, and every human deckbuilder) refer to
-        # them by the front face's name alone. Without this, validate_deck()
-        # spuriously flags real, legal cards as "not found on Scryfall (likely
-        # hallucinated)" (confirmed real incident 2026-07-01: "The Fall of
-        # Lord Konda" flagged unknown on the first repair pass; only passed
-        # on the second because the repair agent happened to recall the exact
-        # "// Fragment of Konda" suffix from training data — a lucky,
-        # unverifiable guess in a headless run with no live Scryfall access,
-        # not a real fix). setdefault() so a genuine distinct single-faced
-        # card never gets silently shadowed by an MDFC's front-face alias.
-        if " // " in name:
-            front_key = name.split(" // ", 1)[0].strip().lower()
-            trimmed.setdefault(front_key, entry)
+    trimmed = _trim_bulk_cards(raw_cards)
 
     config.SCRYFALL_CACHE_PATH.write_text(json.dumps(trimmed))
     config.SCRYFALL_CACHE_META_PATH.write_text(json.dumps({
@@ -161,6 +216,11 @@ def refresh_cache(force: bool = False) -> int:
         # regardless of age, so adding a field to _KEEP_FIELDS in the future
         # can't silently ship stale-shaped data again.
         "keep_fields": sorted(_KEEP_FIELDS),
+        # Same idea for the trim/skip rules: a cache built before the
+        # 2026-07-11 art-series fix is poisoned (real cards shadowed by blank
+        # collector cards) no matter how fresh it is, so refresh_if_stale()
+        # must force a rebuild when this stamp is missing or outdated.
+        "trim_schema": _TRIM_SCHEMA,
     }, indent=2))
     return len(trimmed)
 
@@ -186,15 +246,16 @@ def _cache_age_days() -> float | None:
 
 
 def _cache_schema_matches() -> bool:
-    """False if the on-disk cache predates the current _KEEP_FIELDS (see the
-    schema-version comment in refresh_cache()) — treated as stale regardless of
-    age. Older cache files with no "keep_fields" entry at all are also treated as
-    a mismatch (conservative default: refresh rather than risk silently serving
-    fields that don't exist)."""
+    """False if the on-disk cache predates the current _KEEP_FIELDS or the
+    current trim rules (_TRIM_SCHEMA) — treated as stale regardless of age.
+    Older cache files missing either stamp are also treated as a mismatch
+    (conservative default: refresh rather than risk silently serving fields
+    that don't exist, or entries shadowed by non-deck collector cards)."""
     meta = _cache_meta()
     if meta is None:
         return False
-    return meta.get("keep_fields") == sorted(_KEEP_FIELDS)
+    return (meta.get("keep_fields") == sorted(_KEEP_FIELDS)
+            and meta.get("trim_schema") == _TRIM_SCHEMA)
 
 
 def refresh_if_stale(max_age_days: int = config.SCRYFALL_CACHE_MAX_AGE_DAYS) -> bool:
