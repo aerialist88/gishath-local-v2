@@ -279,13 +279,17 @@ class SimulationManager:
     def _save(self, session: dict) -> None:
         (SIMULATION_DIR / f"{session['id']}.json").write_text(json.dumps(session, indent=2))
 
-    def start(self, deck_ids: list[str], seed: int | None = None) -> dict:
+    def start(self, deck_ids: list[str], seed: int | None = None, coach: bool = False) -> dict:
         session_id = uuid.uuid4().hex[:12]
         # Engine choice (2026-07-10): Forge — a real deterministic rules engine
         # with its own game AI — whenever its binaries are installed under
         # third_party/; the LLM referee stays as the fallback. Forge's sim mode
         # has no RNG seed parameter, so the seed only applies in LLM mode.
         if forge_engine.is_available():
+            if coach and not forge_engine.coach_available():
+                # Checked here, not just in run_match, so the launch request
+                # 400s immediately instead of minting a doomed session.
+                raise ValueError("Coached matches need the fork build — run forge_bridge/build.sh and the forge-src Maven build.")
             if not 2 <= len(deck_ids) <= 4:
                 raise ValueError("Choose between two and four saved decks.")
             if len(set(deck_ids)) != len(deck_ids):
@@ -297,8 +301,10 @@ class SimulationManager:
                     raise ValueError("One of the selected decks could not be found.")
                 players.append({"seat": position, "deck_id": deck_id, "commander": deck.get("commander", ""),
                                 "archetype": deck.get("archetype", ""), "cards": {}})
-            grounding = {"engine": "forge", "players": players}
-            session_grounding = {"engine": "forge", "seed": None, "players": players}
+            grounding = {"engine": "forge", "coach": bool(coach), "players": players}
+            session_grounding = {"engine": "forge", "seed": None, "coach": bool(coach), "players": players}
+        elif coach:
+            raise ValueError("Coached matches run on the Forge engine, which is not installed under third_party/.")
         else:
             selected_seed = int(seed) if seed is not None else random.SystemRandom().randint(1, 2_147_483_647)
             grounding = build_grounding(deck_ids, selected_seed)
@@ -322,7 +328,8 @@ class SimulationManager:
         """Play the game on the Forge rules engine, then have the LLM write the
         deck reports FROM the engine's log (grounded; non-fatal if it fails).
         Returns the session update dict."""
-        match = forge_engine.run_match([p["deck_id"] for p in grounding["players"]])
+        match = forge_engine.run_match([p["deck_id"] for p in grounding["players"]],
+                                       coach=bool(grounding.get("coach")))
         parsed = match["result"]
         # Receipts: the engine's full typed log, plus the structured per-turn
         # detail export (every parsed engine event — casts with targets,
@@ -359,6 +366,9 @@ class SimulationManager:
         return {"status": "complete", "result": {
             "opening_note": opening_note, "turns": parsed["turns"], "winner": parsed["winner"],
             "deck_reports": deck_reports, "unresolved_questions": notes,
+            # Coach receipts ({calls, failures, run_id}) — the session view
+            # shows them, and run_id keys the spend log for the game's cost.
+            **({"coach": match["coach"]} if "coach" in match else {}),
         }}
 
     def _narrate_forge(self, session_id: str, grounding: dict, parsed: dict) -> tuple[str, list[dict]]:
@@ -504,6 +514,7 @@ class SimulationManager:
                 "status": session.get("status"),
                 "created_utc": session.get("created_utc"),
                 "seed": grounding.get("seed"),
+                "coach": bool(grounding.get("coach")),
                 "commanders": [p.get("commander", "?") for p in (grounding.get("players") or [])],
                 "error": session.get("error"),
             })

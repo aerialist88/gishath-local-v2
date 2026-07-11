@@ -239,7 +239,8 @@ def start_simulation():
         return jsonify({"error": "deck_ids must be a list"}), 400
     try:
         seed = body.get("seed")
-        session = simulator.MANAGER.start([str(deck_id) for deck_id in deck_ids], seed=seed)
+        session = simulator.MANAGER.start([str(deck_id) for deck_id in deck_ids], seed=seed,
+                                          coach=bool(body.get("coach")))
         return jsonify(session), 202
     except (TypeError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
@@ -305,8 +306,10 @@ def simulation_forge_log(session_id: str):
 def engine_status():
     """Which simulation engine games will run on — the UI hides the LLM
     referee's grounding paraphernalia (source documents, replay seed) when
-    the Forge rules engine is installed and will be used instead."""
-    return jsonify({"forge": forge_engine.is_available()})
+    the Forge rules engine is installed and will be used instead. "coach"
+    says whether the fork build with the LLM-coach hooks is in place — the
+    match page disables its coached-match toggle without it."""
+    return jsonify({"forge": forge_engine.is_available(), "coach": forge_engine.coach_available()})
 
 
 @app.route("/api/rules", methods=["GET", "POST"])

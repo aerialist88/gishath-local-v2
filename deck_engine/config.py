@@ -126,6 +126,12 @@ MODEL_TIERS: dict = {
     "card_tagger": os.environ.get("DECK_ENGINE_CARD_TAGGER_MODEL", "haiku"),
     # A bounded, evidence-grounded Commander rehearsal launched from Atelier.
     "simulate": os.environ.get("DECK_ENGINE_SIMULATE_MODEL", "sonnet"),
+    # Forge match coach (atelier/coach.py): "coach_orders" reads a decklist
+    # once per deck (cached forever at state/coach_orders/); "coach_turn" runs
+    # once per seat per own-turn during a coached match (~40-60 calls/game),
+    # so it stays on the cheapest tier.
+    "coach_orders": os.environ.get("DECK_ENGINE_COACH_ORDERS_MODEL", "sonnet"),
+    "coach_turn": os.environ.get("DECK_ENGINE_COACH_TURN_MODEL", "haiku"),
 }
 
 MAX_VALIDATE_REPAIR_ATTEMPTS: int = 3   # give the Scryfall repair loop this many tries before failing the run

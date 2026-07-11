@@ -1242,6 +1242,7 @@ function statsTab(deck) {
 async function viewMatch() {
   const [decks, ruleStatus, engine] = await Promise.all([api("/api/decks"), api("/api/rules"), api("/api/engine").catch(() => ({}))]);
   const forge = !!engine.forge; // Forge games ignore the seed and never read the LLM grounding documents
+  const coachOk = !!engine.coach; // the fork build with the AtelierCoach hooks — without it the coached toggle is shown but disabled
   HEAD_SUB.textContent = "grounded Commander playtest";
   HEAD_RIGHT.innerHTML = "";
   const cards = decks.map((d, i) => `<label class="match-deck ${i < 4 ? "selected" : ""}">
@@ -1262,7 +1263,11 @@ async function viewMatch() {
     ${decks.length >= 2 ? `<section class="match-panel">
       <div class="match-panel-head"><div><div class="caps">Seats at the table</div><h2>Choose your pod</h2></div><span id="match-count" class="pill">${Math.min(decks.length, 4)} selected</span></div>
       <div class="match-decks">${cards}</div>
-      <div class="match-actions">${forge ? "" : `<label class="seed-field">Replay seed <input id="match-seed" inputmode="numeric" placeholder="Random"></label>`}<button class="btn-brass" id="btn-run-match">Play the match</button></div>
+      <div class="match-actions">${forge
+        ? `<label class="coach-toggle${coachOk ? "" : " unavailable"}" title="${coachOk
+            ? "Every seat gets an LLM turn coach — threat ranking and hold lists, enforced inside the engine. Adds roughly $1 and 15+ minutes per game."
+            : "Needs the coached fork build — run forge_bridge/build.sh and the forge-src Maven build."}"><input type="checkbox" id="match-coach" ${coachOk ? "" : "disabled"}> Coached match <small>(LLM, ~$1, slow)</small></label>`
+        : `<label class="seed-field">Replay seed <input id="match-seed" inputmode="numeric" placeholder="Random"></label>`}<button class="btn-brass" id="btn-run-match">Play the match</button></div>
       <p class="match-note">Played to an actual winner — the deck reports at the end are how the Atelier grades its own builds.${forge ? "" : " Genuinely ambiguous rules moments are resolved reasonably and logged as judgement calls."}</p>
     </section>` : `<div class="empty-note">Forge at least two decks before staging a rehearsal.</div>`}
     ${forge ? "" : `<section class="guide-card"><div class="caps">Source documents</div><div><b>Commander Match Simulation Guide</b><span>deck_engine/prompts/commander_match_guide.md</span></div><div><b>Card Oracle text</b><span>Local Scryfall bulk cache — exact text is bundled only for the selected decks.</span></div><div><b>Magic Comprehensive Rules</b><span>${ruleStatus.available ? `local indexed copy · effective ${esc(ruleStatus.effective_date || "date unavailable")}` : "not cached yet"}</span><button class="rule-refresh" id="btn-refresh-rules">${ruleStatus.available ? "Refresh official rules" : "Download official rules"}</button></div></section>`}
@@ -1290,13 +1295,14 @@ async function viewMatch() {
   if (run) run.onclick = async () => {
     const deckIds = checks.filter((input) => input.checked).map((input) => input.value);
     const rawSeed = ($("#match-seed")?.value || "").trim();
+    const coached = !!$("#match-coach")?.checked;
     if (deckIds.length < 2) { toast("Choose at least two decks."); return; }
     if (rawSeed && !/^\d+$/.test(rawSeed)) { toast("Use a whole-number seed, or leave it blank."); return; }
     run.disabled = true;
     run.textContent = "Dealing the hands…";
     try {
-      const session = await api("/api/simulations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ deck_ids: deckIds, seed: rawSeed || null }) });
-      watchSimulation(session.id, run);
+      const session = await api("/api/simulations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ deck_ids: deckIds, seed: rawSeed || null, coach: coached }) });
+      watchSimulation(session.id, run, coached);
     } catch (err) { run.disabled = false; run.textContent = "Play the match"; toast(err.message); }
   };
   loadMatchHistory();
@@ -1319,7 +1325,7 @@ async function loadMatchHistory() {
       <button class="history-row" data-sim="${esc(s.id)}" style="display:flex;gap:14px;align-items:baseline;width:100%;text-align:left;background:none;border:0;border-top:1px solid rgba(120,90,30,.15);padding:10px 4px;cursor:pointer;font:inherit">
         <span class="mono" style="font-size:11px;color:var(--ink3);white-space:nowrap">${esc((s.created_utc || "").slice(0, 16).replace("T", " "))}</span>
         <b style="flex:1">${(s.commanders || []).map(esc).join(" · ")}</b>
-        <span class="mono" style="font-size:11px;color:var(--ink3);white-space:nowrap">${s.seed != null ? "seed " + esc(s.seed) : "Forge engine"}</span>
+        <span class="mono" style="font-size:11px;color:var(--ink3);white-space:nowrap">${s.seed != null ? "seed " + esc(s.seed) : s.coach ? "Forge · coached" : "Forge engine"}</span>
         <span class="pill">${s.status === "complete" ? "verified" : "held"}</span>
       </button>`).join("")}</div>
   </section>`;
@@ -1335,9 +1341,11 @@ async function loadMatchHistory() {
   });
 }
 
-async function watchSimulation(id, button) {
+async function watchSimulation(id, button, coached) {
   const resultEl = $("#match-result");
-  resultEl.innerHTML = `<div class="match-running"><span class="pulse">Playing the game to a finish…</span><small>Forge engine games take about a minute (JVM boot + the whole game); the LLM fallback takes a few.</small></div>`;
+  resultEl.innerHTML = `<div class="match-running"><span class="pulse">Playing the game to a finish…</span><small>${coached
+    ? "Coached games run long — an LLM plans every turn for every seat, so expect 15–20 minutes."
+    : "Forge engine games take about a minute (JVM boot + the whole game); the LLM fallback takes a few."}</small></div>`;
   const poll = async () => {
     try {
       const session = await api("/api/simulations/" + encodeURIComponent(id));
@@ -1367,6 +1375,7 @@ function renderSimulation(root, session) {
   const hoverNames = new Set();
   (g.players || []).forEach((p) => p.commander && hoverNames.add(p.commander));
   turns.forEach((t) => (t.cards_played || []).forEach((n) => n && hoverNames.add(n)));
+  turns.forEach((t) => (t.triggered || []).forEach((n) => n && hoverNames.add(n))); // trigger sources (Forge games)
   (result.deck_reports || []).forEach((r) => (r.key_cards || []).forEach((n) => n && hoverNames.add(n)));
   const escapedNames = [...hoverNames].map(esc).sort((a, b) => b.length - a.length)
     .map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
@@ -1378,12 +1387,13 @@ function renderSimulation(root, session) {
     return nameRe ? safe.replace(nameRe, '<span class="card-name" data-card="$1">$1</span>') : safe;
   };
   const champ = seat(winner.seat);
-  // The engine's method string is a semicolon chain ("X has won because …;
-  // Y has lost because …; Z has lost because …") — keep the win as the
-  // headline and fold the per-player losses into a quieter second line.
+  // The engine's method string is a semicolon chain of outcome lines in
+  // whatever order Forge logged them — the win is NOT always first. Pick the
+  // "has won" line as the headline and fold every loss into a quieter second
+  // line, so the winner is never buried under an opponent's exit.
   const reasons = String(winner.method || "").split("; ");
-  const headline = reasons[0] || "";
-  const losses = reasons.slice(1);
+  const headline = reasons.find((r) => r.includes(" has won")) || reasons[0] || "";
+  const losses = reasons.filter((r) => r !== headline);
   // One muted, parchment-friendly tint per seat, used everywhere a player is
   // named — turn rows, board strips, life totals, deck reports — so "who is
   // P3" reads at a glance.
@@ -1399,17 +1409,22 @@ function renderSimulation(root, session) {
     const cells = (g.players || []).map((p) => {
       const b = t.board[String(p.seat)]; if (!b) return "";
       if ((t.life || [])[p.seat - 1] <= 0)  // eliminated — their battlefield is gone, don't show stale counts
-        return `<span title="${esc(p.commander)} — eliminated" style="display:inline-flex;align-items:center;gap:4px;opacity:.35">${dot(p.seat, 6)}out</span>`;
+        return `<span title="${esc(p.commander)} — eliminated" style="display:inline-flex;align-items:center;gap:4px;opacity:.35;min-width:44px">${dot(p.seat, 6)}out</span>`;
       const active = p.seat === t.seat;
-      const mana = active && b.mana ? ` ${esc(b.mana)}◈` : "";
-      return `<span title="${esc(p.commander)}" style="display:inline-flex;align-items:center;gap:4px;${active ? "color:var(--ink2);font-weight:600" : "opacity:.75"}">${dot(p.seat, 6)}${esc(b.lands)}🜨${mana}</span>`;
-    }).filter(Boolean).join('<span style="opacity:.35">·</span>');
-    return `<div class="mono" style="font-size:10.5px;color:var(--ink3);padding:0 4px 6px 42px;display:flex;gap:8px;flex-wrap:wrap;align-items:baseline">${cells}</div>`;
+      const mana = active && b.mana ? ` <span style="opacity:.85">+${esc(b.mana)}◈</span>` : "";
+      return `<span title="${esc(p.commander)} — ${esc(b.lands)} lands${active && b.mana ? `, ${esc(b.mana)} mana produced` : ""}" style="display:inline-flex;align-items:center;gap:4px;min-width:44px;${active ? "color:var(--ink2);font-weight:600" : "opacity:.65"}">${dot(p.seat, 6)}${esc(b.lands)}🜨${mana}</span>`;
+    }).filter(Boolean).join("");
+    return `<div class="mono" style="font-size:10.5px;color:var(--ink3);padding:0 4px 6px 42px;display:flex;gap:10px;flex-wrap:wrap;align-items:baseline">${cells}</div>`;
   };
   // Whether any turn carries a board tracker — decides if the legend is shown.
   const hasBoard = turns.some((t) => t.board);
   const rowStyle = "display:flex;gap:12px;align-items:baseline;padding:7px 4px 3px;font-size:13.5px;";
-  const engineLabel = g.engine === "forge" ? "Forge rules engine · real game" : "LLM referee · seed " + esc(g.seed);
+  const engineLabel = g.engine === "forge"
+    ? (g.coach ? "Forge rules engine · LLM-coached game" : "Forge rules engine · real game")
+    : "LLM referee · seed " + esc(g.seed);
+  // Coach receipts ({calls, failures, run_id}) ride on the result — shown so
+  // a coached game's cost and reliability are auditable from the session view.
+  const coach = result.coach;
   root.innerHTML = `<section class="simulation-result">
     <div class="result-head"><div><div class="caps">Simulated game · ${engineLabel}</div>
       <h2>${champ.commander ? esc(champ.commander) + " takes the table" : "Game complete"}</h2>
@@ -1418,11 +1433,12 @@ function renderSimulation(root, session) {
       <span class="seal-badge">${g.engine === "forge" ? "Engine-tracked zones" : "Decklists verified"}</span></div>
     <div class="source-strip">${(g.players || []).map((p) => `<span>${dot(p.seat, 6)} Player ${esc(p.seat)}: ${esc(p.commander)} · ${(p.cards || {}).mulligans || 0} mulligan${(p.cards || {}).mulligans === 1 ? "" : "s"}${(p.cards || {}).kept_hand ? ` · kept ${esc(p.cards.kept_hand)}` : ""}</span>`).join("")}${g.rules_effective_date ? `<span>CR effective ${esc(g.rules_effective_date)}</span>` : ""}</div>
     ${g.engine === "forge" && session.id ? `<p class="match-note" style="margin-top:8px">Receipts: <a href="/api/simulations/${esc(session.id)}/details">per-turn detail (JSON)</a> · <a href="/api/simulations/${esc(session.id)}/forge-log">raw Forge log</a></p>` : ""}
+    ${coach ? `<p class="match-note" style="margin-top:4px">Coach: ${esc(coach.calls)} turn plan${coach.calls === 1 ? "" : "s"} served${coach.failures ? ` · ${esc(coach.failures)} failed (stock AI took those turns)` : " · no failures"}${coach.run_id ? ` · spend log run <span class="mono">${esc(coach.run_id)}</span>` : ""}</p>` : ""}
     ${result.opening_note && winner.method ? `<p class="match-note">${markCards(result.opening_note)}</p>` : ""}
     <div style="margin-top:14px">
       <div class="caps" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:baseline;gap:12px">
         <span>The game, turn by turn</span>
-        ${hasBoard ? `<span class="mono" style="text-transform:none;letter-spacing:0;font-size:10px;color:var(--ink3)">🜨 lands in play · ◈ mana produced · numbers on the right are life</span>` : ""}
+        ${hasBoard ? `<span class="mono" style="text-transform:none;letter-spacing:0;font-size:10px;color:var(--ink3)">🜨 lands in play · +◈ mana made this turn · right column is life</span>` : ""}
       </div>
       ${turns.map((t, i) => {
         // Rows are grouped by game round: the turn number is printed once per
@@ -1434,7 +1450,7 @@ function renderSimulation(root, session) {
           <span class="mono" style="font-size:11px;color:var(--ink3);min-width:30px;font-weight:${roundStart ? 700 : 400}">${roundStart ? "T" + esc(t.turn) : ""}</span>
           <b style="min-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(seat(t.seat).commander || "")}">${dot(t.seat)} <span class="mono" style="font-size:10.5px;color:${tint(t.seat)};font-weight:600">P${esc(t.seat)}</span> ${esc((seat(t.seat).commander || "Player " + t.seat).split(",")[0])}</b>
           <span style="flex:1">${markCards(t.play)}</span>
-          <span class="mono" style="font-size:11px;color:var(--ink3);white-space:nowrap;display:inline-flex;align-items:baseline;gap:7px">${(t.life || []).map((v, i2) => `<span style="display:inline-flex;align-items:center;gap:3px;${v <= 0 ? "opacity:.4;text-decoration:line-through" : ""}">${dot(i2 + 1, 5)}${esc(v)}</span>`).join("")}</span>
+          <span class="mono" style="font-size:11px;color:var(--ink3);white-space:nowrap;display:inline-flex;align-items:baseline;gap:8px">${(t.life || []).map((v, i2) => `<span style="display:inline-flex;align-items:center;gap:3px;min-width:32px;justify-content:flex-end;${v <= 0 ? "opacity:.4;text-decoration:line-through" : ""}">${dot(i2 + 1, 5)}${esc(v)}</span>`).join("")}</span>
         </div>
         ${boardStrip(t)}
       </div>`; }).join("")}

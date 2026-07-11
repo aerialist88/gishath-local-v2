@@ -199,6 +199,12 @@ main { min-height: calc(100vh - 70px); }
 .match-actions { display: flex; justify-content: flex-end; align-items: center; gap: 16px; margin-top: 18px; }
 .seed-field { display: flex; align-items: center; gap: 8px; color: var(--ink3); font: 11px var(--mono); }
 .seed-field input { width: 108px; border: 1px solid var(--brass-border); border-radius: 6px; padding: 8px; background: var(--panel2); font: 12px var(--mono); color: var(--ink); }
+/* Opt-in LLM-coached Forge match — sits beside the launch button, styled like the seed field. */
+.coach-toggle { display: flex; align-items: center; gap: 7px; color: var(--ink3); font: 11px var(--mono); cursor: pointer; }
+.coach-toggle input { accent-color: var(--brass-border); cursor: pointer; }
+.coach-toggle small { font-size: 10px; opacity: .8; }
+.coach-toggle.unavailable { opacity: .45; cursor: not-allowed; }
+.coach-toggle.unavailable input { cursor: not-allowed; }
 .match-note { margin-top: 11px; color: var(--ink3); font-size: 12px; }
 .guide-card { display: grid; grid-template-columns: 155px repeat(3, 1fr); gap: 18px; margin: 22px 0; padding: 15px 17px; border: 1px dashed var(--panel-border); border-radius: 10px; background: rgba(248,241,225,.7); }
 .guide-card div { display: flex; flex-direction: column; gap: 2px; }
