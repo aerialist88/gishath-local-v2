@@ -97,7 +97,7 @@ def _oracle_text_block(cache: dict, names: list[str]) -> str:
         card = cache.get(str(name).strip().lower())
         if card is None:
             continue
-        oracle_text = (card.get("oracle_text") or "").strip() or "(no rules text — likely a land or vanilla creature)"
+        oracle_text = scryfall_cache.oracle_text_of(card) or "(no rules text — likely a land or vanilla creature)"
         lines.append(f'- {card.get("name", name)}: "{oracle_text}"')
     return "\n".join(lines) if lines else "(none of the named key cards were found in the Scryfall cache)"
 
@@ -543,13 +543,20 @@ def _judge(
         cards, dupes_removed = _normalize_draft_cards(d.get("cards", []), cache)
         d["cards"] = cards
         land_count = _count_lands(cards, cache)
+        # Ramp counted the same structural way the validate tripwire counts it —
+        # the judge previously saw land and on-mechanic evidence but nothing for
+        # ramp, the exact dimension that collapsed in runs 7b80666e/3d23a52f.
+        ramp_count = sum(
+            1 for c in cards if scryfall_cache.is_ramp_card(cache.get(str(c).strip().lower()) or {})
+        )
         # Code-computed on-mechanic signal per draft — same counter the S3 synergy
         # gate uses later, handed to the judge as evidence rather than asking it
         # to eyeball 3×99 names for mechanic overlap.
         _, match_count, _ = synergy_check.gate_passes(cards, tokens, cache)
         structural = (
             f"{len(cards)} cards (required: {config.DECK_SIZE - 1}), "
-            f"{land_count} lands (quota {quotas['land_min']}-{quotas['land_max']})"
+            f"{land_count} lands (quota {quotas['land_min']}-{quotas['land_max']}), "
+            f"{ramp_count} ramp sources (quota {quotas['ramp_min']}-{quotas['ramp_max']})"
         )
         if dupes_removed:
             structural += f"; {dupes_removed} duplicate cop{'y' if dupes_removed == 1 else 'ies'} already removed in code"
@@ -788,6 +795,16 @@ def _synergy_gate_and_repair(
     # Budget exhausted — ship the best attempt rather than failing the whole run.
     # This is a backstop, not a hard quality gate: the PRD is explicit about
     # tolerating false negatives here over blocking a night's deck entirely.
+    # If the last repair attempt left the deck Scryfall-INVALID, revert to the
+    # decklist that entered the gate — it passed full validation moments ago,
+    # and a below-threshold valid deck beats no deck. (Run 33606bc6 died here:
+    # synergy repair introduced off-color Mystic Retrieval, the inner repair
+    # loop couldn't remove it, and the invalid list propagated up to a raise —
+    # $1.35 spent, nothing shipped, while a valid deck existed the whole time.)
+    if not validation.is_valid:
+        _log(f"{stage_prefix}: synergy repair left the deck invalid and the attempt budget is "
+             f"exhausted — reverting to the pre-gate decklist (below synergy threshold, but valid)")
+        return cards, existing_validation, True
     return current, validation, True
 
 
@@ -857,10 +874,17 @@ def _run_one_attempt(
             run_id, concept, optimized_cards, cache, stage_prefix=f"optimize/attempt{attempt}", max_attempts=2,
         )
         if not final_validation.is_valid:
-            raise claude_cli.ClaudeCLIError(
-                "Deck failed validation after the optimize-repair loop and could not be recovered:\n"
-                f"{final_validation.as_repair_notes()}"
-            )
+            # Optimize's swaps are enhancements to an ALREADY-VALID deck — if a
+            # bad swap can't be repaired, discard the swaps and keep that deck
+            # rather than failing the run (same revert-over-raise policy as the
+            # synergy gate's exhausted-budget path). Optimize's prose may still
+            # reference the discarded swap-ins; the prose-consistency pass at
+            # the end of the run exists to catch exactly that.
+            warning = ("optimize's swaps broke validation and could not be repaired — "
+                       "reverted to the pre-optimize decklist, discarding its swaps")
+            _log(f"optimize/attempt{attempt}: {warning}")
+            swap_warnings.append(warning)
+            final_cards, final_validation = cards, validation
     else:
         final_cards, final_validation = cards, validation
 

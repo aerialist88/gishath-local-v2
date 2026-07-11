@@ -76,16 +76,18 @@ def _forced_concept(run_id: str, forced_commander: str, cache: dict) -> ConceptC
             f"select_concept: commander not found on Scryfall: {forced_commander!r} — check the spelling."
         )
     type_line = (card.get("type_line") or "").lower()
-    oracle_text_lower = (card.get("oracle_text") or "").lower()
+    # oracle_text_of, not the raw field: multi-face text (MDFC/transform
+    # commanders, "can be your commander" on a back face) lives in card_faces
+    # and the top-level field is empty for those layouts.
+    oracle_text = scryfall_cache.oracle_text_of(card)
     if not (("legendary" in type_line and "creature" in type_line)
-            or "can be your commander" in oracle_text_lower):
+            or "can be your commander" in oracle_text.lower()):
         raise claude_cli.ClaudeCLIError(
             f"select_concept: {card.get('name', forced_commander)} isn't commander-eligible "
             f"({card.get('type_line')})."
         )
 
     name = card.get("name", forced_commander)
-    oracle_text = card.get("oracle_text") or ""
     rules = prompt_helpers.bracket_rules_text()
     prompt = (
         f"Tonight's EDH (Commander) deck commission has a FIXED commander, chosen by the user: {name}.\n"
@@ -158,9 +160,9 @@ def select_concept(
             continue
 
         type_line = (card.get("type_line") or "").lower()
-        oracle_text = (card.get("oracle_text") or "").lower()
+        oracle_text = scryfall_cache.oracle_text_of(card)  # face-aware, see _forced_concept
         is_legendary_creature = "legendary" in type_line and "creature" in type_line
-        can_be_commander = "can be your commander" in oracle_text
+        can_be_commander = "can be your commander" in oracle_text.lower()
         if not (is_legendary_creature or can_be_commander):
             last_error = f"card isn't commander-eligible: {commander} ({card.get('type_line')})"
             continue
@@ -177,7 +179,6 @@ def select_concept(
                 blocked.add(key)  # don't let the retry pick the same expensive card again
                 continue
 
-        oracle_text = card.get("oracle_text") or ""
         # PRD v4 amendment S3, resolved open question #3: mechanic tokens extracted
         # HERE, at select-time, once per run — not re-derived per parallel draft or
         # per repair attempt. One cheap Haiku call; [] (gate no-op) on any failure.

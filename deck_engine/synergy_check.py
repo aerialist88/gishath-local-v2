@@ -20,7 +20,7 @@ adjudicate borderline cases.
 """
 from __future__ import annotations
 
-from . import claude_cli, config
+from . import claude_cli, config, scryfall_cache
 
 MECHANIC_TOKEN_JSON_SCHEMA = {
     "type": "object",
@@ -81,7 +81,11 @@ def count_synergy_matches(cards: list[str], tokens: list[str], cache: dict) -> t
         type_line = (card.get("type_line") or "").lower()
         if "land" in type_line:
             continue  # lands are exempt from the synergy count entirely
-        haystack = f"{type_line} {(card.get('oracle_text') or '').lower()}"
+        # oracle_text_of, not the top-level field: MDFC/transform/adventure text
+        # lives in card_faces, and an empty haystack read every flip-Saga and
+        # modal card as generic filler (2026-07-11 audit — the Satsuki
+        # Saga-recursion deck's own theme pieces counted as off-mechanic).
+        haystack = f"{type_line} {scryfall_cache.oracle_text_of(card).lower()}"
         if any(tok in haystack for tok in tokens):
             match_count += 1
         else:

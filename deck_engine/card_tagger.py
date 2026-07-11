@@ -21,7 +21,7 @@ needing perfect coverage.
 """
 from __future__ import annotations
 
-from . import claude_cli, config
+from . import claude_cli, config, scryfall_cache
 
 _RAMP_PATTERNS = (
     "search your library for a land", "search your library for a basic land",
@@ -80,7 +80,7 @@ def _heuristic_tag(card: dict) -> tuple[str, str] | None:
     """Returns (role, phase) from cheap code heuristics, or None if this card
     should fall through to the Haiku pass instead (nothing matched confidently)."""
     type_line = (card.get("type_line") or "").lower()
-    oracle = (card.get("oracle_text") or "").lower()
+    oracle = scryfall_cache.oracle_text_of(card).lower()  # multi-face text lives in card_faces
 
     if "land" in type_line:
         return "Land/Mana base", "early"

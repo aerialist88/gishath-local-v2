@@ -281,6 +281,29 @@ def load_cache(path: Path = config.SCRYFALL_CACHE_PATH) -> dict[str, dict]:
 
 # ── Validation ────────────────────────────────────────────────────────────────
 
+def oracle_text_of(card: dict) -> str:
+    """The card's full rules text, whichever field Scryfall put it in: the
+    top-level oracle_text for normal cards, or the card_faces' texts joined for
+    multi-face layouts (MDFC/transform/adventure/split), where Scryfall leaves
+    the top level EMPTY. 1,735 cached cards have face-only text, and every
+    consumer used to read only the top level (2026-07-11 audit) — so the
+    oracle-grounding blocks, the synergy gate, the ramp counter, the tagger
+    heuristics, and mechanic-token extraction were all blind to exactly the
+    card class models most often misremember. Every rules-text read in this
+    package must go through here, never card.get("oracle_text") directly."""
+    text = (card.get("oracle_text") or "").strip()
+    if text:
+        return text
+    parts = []
+    for face in card.get("card_faces") or []:
+        face_text = (face.get("oracle_text") or "").strip()
+        if not face_text:
+            continue
+        face_name = (face.get("name") or "").strip()
+        parts.append(f"{face_name}: {face_text}" if face_name else face_text)
+    return "\n//\n".join(parts)
+
+
 # Structural ramp detection (2026-07-11, Xanathar/Hraesvelgr post-mortem): after
 # the land tripwire went in, the mana base's CARD count recovered but its ramp
 # collapsed — run 7b80666e shipped 4 ramp sources under a 6-mana commander and
@@ -308,7 +331,7 @@ def is_ramp_card(card: dict) -> bool:
     suite always clears the floor and a gutted one never does."""
     if "land" in ((card.get("type_line") or "").lower()):
         return False
-    oracle = (card.get("oracle_text") or "").lower()
+    oracle = oracle_text_of(card).lower()
     if any(p in oracle for p in _RAMP_MANA_PATTERNS):
         return True
     if all(p in oracle for p in _RAMP_LAND_FETCH_PATTERNS):
@@ -393,8 +416,7 @@ def _is_singleton_exempt(card: dict) -> bool:
     name_lower = (card.get("name") or "").lower()
     if name_lower in _BASIC_LAND_NAMES:
         return True
-    oracle_text = (card.get("oracle_text") or "").lower()
-    return _SINGLETON_EXEMPT_PHRASE in oracle_text
+    return _SINGLETON_EXEMPT_PHRASE in oracle_text_of(card).lower()
 
 
 def validate_deck(commander: str, decklist: list[str], cache: dict[str, dict] | None = None,

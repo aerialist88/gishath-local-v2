@@ -62,7 +62,9 @@ def _slugify(commander: str) -> str:
     commas/periods stripped. e.g. "Zinnia, Valley's Voice" -> "zinnia-valleys-voice".
     If EDHREC's actual slug convention differs for a given card, that commander's
     fetch just 404s and this degrades to an empty pool (see fetch_pool()) — not a crash."""
-    slug = commander.lower().strip()
+    # EDHREC slugs a multi-face commander by its FRONT face only — slugging the
+    # combined "A // B" name 404s and silently costs the run its whole pool.
+    slug = commander.split(" // ")[0].lower().strip()
     slug = re.sub(r"[',\.]", "", slug)
     slug = re.sub(r"[^a-z0-9]+", "-", slug).strip("-")
     return slug
@@ -171,10 +173,12 @@ def pool_block(commander: str, cache: dict) -> tuple[str, bool]:
             False,
         )
 
+    from . import scryfall_cache  # local import — keeps this module usable standalone
+
     lines = []
     for name in pool:
         card = cache.get(name.strip().lower())
-        oracle = (card.get("oracle_text") or "").strip() if card else ""
+        oracle = scryfall_cache.oracle_text_of(card) if card else ""
         summary = (oracle.split(".")[0].strip() + ".") if oracle else "(no oracle text on file)"
         lines.append(f"- {name}: {summary}")
     return "\n".join(lines), True
