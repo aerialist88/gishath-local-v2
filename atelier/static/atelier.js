@@ -1067,7 +1067,11 @@ async function viewDeck(id) {
   const p = deck.price || {};
   const flaggedCount = (deck.cards || []).filter((c) => c.over_cap).length;
   const delivered = (deck.generated_utc || "").slice(11, 16);
-  const pills = [
+  const pills = deck.owner_deck ? [
+    "3vor's own deck",
+    "Imported decklist",
+    `${(deck.cards || []).length} cards`,
+  ] : [
     `Bracket ${esc(deck.bracket || "?")}`,
     deck.legal ? "Legal ✓" : "Legality unverified",
     deck.synergy_gate_fired ? "Synergy gate repaired" : "Synergy gate passed",
@@ -1077,7 +1081,9 @@ async function viewDeck(id) {
     <div class="deck-header">
       <div class="art-ph" style="width:92px;height:128px;box-shadow:0 3px 8px rgba(120,90,30,.25)" data-art="${esc(deck.commander)}" data-art-kind="normal"><span>commander<br>art</span></div>
       <div style="display:flex;flex-direction:column;gap:5px">
-        <div class="caps-lg">Commission ${esc(deck.run_id8 || "")}${delivered ? " · Delivered " + delivered : ""}</div>
+        <div class="caps-lg">${deck.owner_deck
+          ? `From 3vor's collection · added ${esc((deck.generated_utc || "").slice(0, 10))}`
+          : `Commission ${esc(deck.run_id8 || "")}${delivered ? " · Delivered " + delivered : ""}`}</div>
         <div class="deck-title">${esc(deck.commander)}</div>
         <div class="cp-concept">${esc(deck.archetype || "")}${deck.summary ? " — " + esc(deck.summary) : ""}</div>
         <div style="display:flex;gap:8px;margin-top:6px">${pills.map((x) => `<span class="pill">${x}</span>`).join("")}</div>
@@ -1085,7 +1091,8 @@ async function viewDeck(id) {
       <div class="head-spacer"></div>
       <div class="deck-header-right">
         <div class="deck-price">${money(p.total_sgd)}</div>
-        <div class="deck-price-note">cheapest across the store scrapers${flaggedCount ? ` · ${flaggedCount} card${flaggedCount > 1 ? "s" : ""} over cap, flagged` : ""}${p.unpriced_count ? ` · ${p.unpriced_count} unpriced` : ""}</div>
+        <div class="deck-price-note">${deck.owner_deck ? "already in 3vor's collection — nothing to price" :
+          `cheapest across the store scrapers${flaggedCount ? ` · ${flaggedCount} card${flaggedCount > 1 ? "s" : ""} over cap, flagged` : ""}${p.unpriced_count ? ` · ${p.unpriced_count} unpriced` : ""}`}</div>
         <div style="display:flex;gap:8px">
           ${deck.files && deck.files.moxfield_txt ? `<a class="btn-brass" href="/api/decks/${esc(id)}/file/txt">Moxfield .txt</a>` : ""}
           ${deck.files && deck.files.xlsx ? `<a class="btn-ghost" href="/api/decks/${esc(id)}/file/xlsx">.xlsx</a>` : ""}
@@ -1448,18 +1455,97 @@ function renderSimulation(root, session) {
 
 async function viewGallery() {
   const decks = await api("/api/decks");
+  const mine = decks.filter((d) => d.owner_deck);
+  const forged = decks.filter((d) => !d.owner_deck);
   HEAD_SUB.textContent = "";
-  HEAD_RIGHT.innerHTML = `<span>${decks.length} decks forged</span>`;
+  HEAD_RIGHT.innerHTML = `<span>${forged.length} decks forged${mine.length ? ` · ${mine.length} of 3vor's` : ""}</span>`;
+
+  const forgedCard = (d) => `
+    <div class="shelf-card" onclick="location.hash='#deck/${esc(d.id)}'">
+      <div class="art-ph" data-art="${esc(d.commander)}" style="height:80px"><span>art crop</span></div>
+      <div class="shelf-name">${esc(d.commander)}</div>
+      <div class="shelf-arch">${esc(d.archetype)}</div>
+      <div class="shelf-meta">${esc(d.ts.slice(0, 10))} · ${money(d.total_sgd)}</div>
+    </div>`;
+  const ownCard = (d) => `
+    <div class="shelf-card own-card" onclick="location.hash='#deck/${esc(d.id)}'">
+      <button class="own-remove" data-id="${esc(d.id)}" title="Take this deck off the shelf">×</button>
+      <div class="art-ph" data-art="${esc(d.commander)}" style="height:80px"><span>art crop</span></div>
+      <div class="shelf-name">${esc(d.commander)}</div>
+      <div class="shelf-arch">${esc(d.archetype)}</div>
+      <div class="shelf-meta">${esc(d.ts.slice(0, 10))} · 3vor's own</div>
+    </div>`;
+
   VIEW.innerHTML = `<div class="page">
-    <div class="shelf-head" style="margin-top:28px"><div class="caps-lg">The gallery — every commission</div></div>
-    ${decks.length ? `<div class="gallery-grid">${decks.map((d) => `
-      <div class="shelf-card" onclick="location.hash='#deck/${esc(d.id)}'">
-        <div class="art-ph" data-art="${esc(d.commander)}" style="height:80px"><span>art crop</span></div>
-        <div class="shelf-name">${esc(d.commander)}</div>
-        <div class="shelf-arch">${esc(d.archetype)}</div>
-        <div class="shelf-meta">${esc(d.ts.slice(0, 10))} · ${money(d.total_sgd)}</div>
-      </div>`).join("")}</div>` : '<div class="empty-note">The shelves are bare — the first commission awaits.</div>'}
+    <div class="shelf-head" style="margin-top:28px">
+      <div class="caps-lg">3vor's decks — the master's own</div>
+      <button class="btn-ghost" id="btn-own-toggle">+ Add a deck</button>
+    </div>
+    <div class="panel own-import" id="own-import" style="display:none">
+      <div class="own-import-grid">
+        <div>
+          <div class="caps" style="margin-bottom:5px">Commander</div>
+          <div class="commander-field">
+            <div class="commander-input"><span>&#9813;</span>
+              <input id="own-commander" type="text" placeholder="e.g. Gishath, Sun's Avatar" autocomplete="off">
+            </div>
+            <div class="suggest-box" id="own-suggest" style="display:none"></div>
+          </div>
+          <div class="caps" style="margin:12px 0 5px">Deck name — optional</div>
+          <input class="email-input" id="own-label" placeholder="e.g. Dino stompy">
+          <div class="own-hint">Paste the full list — Moxfield / Archidekt / MTGO exports or plain
+            &ldquo;1 Card Name&rdquo; lines all work. A Commander section in the paste wins over the
+            field above. Once shelved, the deck can take a seat in the match simulator.</div>
+          <button class="btn-brass" id="btn-own-save" style="margin-top:12px">Shelve the deck</button>
+          <div class="own-error" id="own-error"></div>
+        </div>
+        <textarea id="own-text" spellcheck="false" placeholder="1 Gishath, Sun's Avatar&#10;1 Regisaur Alpha&#10;1 Sol Ring&#10;&hellip;"></textarea>
+      </div>
+    </div>
+    ${mine.length ? `<div class="gallery-grid">${mine.map(ownCard).join("")}</div>`
+      : `<div class="empty-note">No decks of your own on the shelf yet — add one to pit it against the guild's builds.</div>`}
+    <div class="shelf-head" style="margin-top:34px"><div class="caps-lg">The gallery — every commission</div></div>
+    ${forged.length ? `<div class="gallery-grid">${forged.map(forgedCard).join("")}</div>` : '<div class="empty-note">The shelves are bare — the first commission awaits.</div>'}
   </div>`;
+
+  $("#btn-own-toggle").onclick = () => {
+    const panel = $("#own-import");
+    const open = panel.style.display === "none";
+    panel.style.display = open ? "" : "none";
+    if (open) $("#own-commander").focus();
+  };
+  wireCommanderAutocomplete($("#own-commander"), $("#own-suggest"), () => {});
+  $("#btn-own-save").onclick = async () => {
+    const btn = $("#btn-own-save"), errEl = $("#own-error");
+    errEl.textContent = "";
+    btn.disabled = true;
+    btn.textContent = "Checking the list…";
+    try {
+      const res = await api("/api/decks/import", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          commander: $("#own-commander").value.trim(),
+          label: $("#own-label").value.trim(),
+          text: $("#own-text").value,
+        }),
+      });
+      toast(`${res.commander} shelved — ${res.count} cards.`);
+      viewGallery();
+    } catch (err) {
+      errEl.textContent = err.message; // the paste stays put so a typo is a one-line fix
+      btn.disabled = false;
+      btn.textContent = "Shelve the deck";
+    }
+  };
+  VIEW.querySelectorAll(".own-remove").forEach((btn) => btn.onclick = async (e) => {
+    e.stopPropagation(); // the card behind it navigates to the deck view
+    if (!confirm("Take this deck off the shelf? Guild commissions are never touched.")) return;
+    try {
+      await api("/api/decks/" + encodeURIComponent(btn.dataset.id), { method: "DELETE" });
+      toast("Deck removed from the shelf.");
+      viewGallery();
+    } catch (err) { toast(err.message); }
+  });
   fillArt(VIEW);
 }
 

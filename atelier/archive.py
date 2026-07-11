@@ -236,6 +236,7 @@ def list_decks() -> list[dict]:
             "colors": deck.get("colors", []),
             "total_sgd": (deck.get("price") or {}).get("total_sgd"),
             "legal": deck.get("legal", True),
+            "owner_deck": bool(deck.get("owner_deck")),  # 3vor's own uploads vs guild commissions
         })
     out.sort(key=lambda d: d["ts"], reverse=True)
     return out

@@ -645,3 +645,25 @@ main { min-height: calc(100vh - 70px); }
   .finale-fig .px-sprite { width: 40px; height: 50px; }
   .finale-card .art-ph { width: 88px; height: 122px; }
 }
+
+/* ── 3vor's own decks — gallery import panel + shelf cards ──────────────── */
+.own-import { margin-top: 16px; padding: 20px; }
+.own-import-grid { display: grid; grid-template-columns: 320px 1fr; gap: 20px; align-items: start; }
+.own-import textarea {
+  min-height: 240px; width: 100%; resize: vertical; padding: 10px 12px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.55;
+  border: 1px solid var(--panel-border); border-radius: 8px;
+  background: rgba(255,255,255,.55); color: var(--ink2);
+}
+.own-import textarea:focus { outline: none; border-color: var(--brass-border); }
+.own-hint { font-size: 11.5px; color: var(--ink3); margin-top: 10px; line-height: 1.55; }
+.own-error { color: var(--rust); font-size: 12px; margin-top: 10px; line-height: 1.5; white-space: pre-wrap; }
+.own-card { position: relative; }
+.own-remove {
+  position: absolute; top: 6px; right: 6px; z-index: 2; display: none;
+  width: 22px; height: 22px; border-radius: 50%; cursor: pointer;
+  border: 1px solid var(--brass-border); background: rgba(250,244,232,.92);
+  color: var(--rust); font-size: 13px; line-height: 1; padding: 0;
+}
+.own-card:hover .own-remove { display: block; }
+@media (max-width: 900px) { .own-import-grid { grid-template-columns: 1fr; } }

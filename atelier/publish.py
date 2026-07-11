@@ -65,6 +65,8 @@ def build_site(dest: Path) -> dict:
     decks: list[dict] = []
     art_index: dict[str, dict] = {}
     for summary in archive.list_decks():
+        if summary.get("owner_deck"):
+            continue  # 3vor's own uploads stay off the public site — it shows what the guild built
         deck = archive.get_deck(summary["id"])
         if deck is None:
             continue

@@ -17,7 +17,7 @@ from flask import Flask, Response, jsonify, request, send_file, send_from_direct
 
 from deck_engine import config, run_log
 
-from . import archive, art, commanders, forge_engine, rules_reference, settings, simulator
+from . import archive, art, commanders, forge_engine, own_decks, rules_reference, settings, simulator
 from .runner import MANAGER, RUNS_DIR
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -67,7 +67,9 @@ def _pricing_up() -> bool:
 def status():
     """Everything the home screen needs in one call."""
     log = MANAGER.current()
-    decks = archive.list_decks()
+    # The home screen is the guild's shopfront — 3vor's own uploads live in the
+    # gallery's dedicated section, never on the "fresh from the forge" shelf.
+    decks = [d for d in archive.list_decks() if not d.get("owner_deck")]
     stored = settings.current()
     return jsonify({
         "pricing_up": _pricing_up(),
@@ -174,6 +176,32 @@ def deck_detail(id8: str):
     if deck is None:
         return jsonify({"error": "deck not found"}), 404
     return jsonify(deck)
+
+
+@app.route("/api/decks/import", methods=["POST"])
+def deck_import():
+    """Shelve one of 3vor's own decks from a pasted decklist."""
+    body = request.get_json(silent=True) or {}
+    try:
+        result = own_decks.save_deck(
+            text=str(body.get("text") or ""),
+            commander=str(body.get("commander") or ""),
+            label=str(body.get("label") or ""),
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(result), 201
+
+
+@app.route("/api/decks/<id8>", methods=["DELETE"])
+def deck_delete(id8: str):
+    """Remove an uploaded deck. Guild commissions refuse (403) by design."""
+    try:
+        return jsonify(own_decks.delete_deck(id8))
+    except LookupError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except PermissionError as exc:
+        return jsonify({"error": str(exc)}), 403
 
 
 @app.route("/api/decks/<id8>/file/<kind>")
