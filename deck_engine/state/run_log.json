@@ -341,5 +341,65 @@
       "U"
     ],
     "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-11T05:50:13.005977+00:00",
+    "commander": "The Peregrine Dynamo",
+    "archetype": "Colorless legendary trigger-copy engine (Peregrine Dynamo reactivation)",
+    "status": "success",
+    "colors": [],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-11T13:39:42.145468+00:00",
+    "commander": "Xanathar, Guild Kingpin",
+    "archetype": "Dimir \"serial victim\" \u2014 single-target library lockdown & cast-from-their-library theft-value control",
+    "status": "success",
+    "colors": [
+      "B",
+      "U"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-11T13:51:30.832378+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[draft/judge/validate/optimize] Deck failed validation after the synergy-gate repair loop and could not be recovered:\n- Outside Hraesvelgr of the First Brood's color identity: Mystic Retrieval"
+  },
+  {
+    "timestamp": "2026-07-11T13:58:58.007787+00:00",
+    "commander": "Hraesvelgr of the First Brood",
+    "archetype": "Mono-blue/Simic Hraesvelgr saboteur \u2014 noncreature spells as a repeatable \"can't be blocked\" delivery pipe for combat-damage payoffs",
+    "status": "success",
+    "colors": [
+      "U"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-11T15:03:47.580127+00:00",
+    "commander": "The Necrobloom",
+    "archetype": "Abzan landfall self-mill dredge-loop \u2014 lands as a repeatable draw-replacement engine and graveyard toolbox",
+    "status": "success",
+    "colors": [
+      "B",
+      "G",
+      "W"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-12T00:02:41.194450+00:00",
+    "commander": "Cleopatra, Exiled Pharaoh",
+    "archetype": "Golgari legendary aristocrats \u2014 bounty removal that draws off opponents' dying legends",
+    "status": "success",
+    "colors": [
+      "B",
+      "G"
+    ],
+    "error_summary": ""
   }
 ]

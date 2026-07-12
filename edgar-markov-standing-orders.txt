@@ -1,0 +1,23 @@
+Terra, Herald of Hope: mills 2 and gains flying every combat, no cost — let this trigger fire freely, it's automatic.
+Terra's combat-damage trigger (pay 2, reanimate power<=3 creature tapped) only matters once something small and good is in the yard — Stitcher's Supplier, Grave Researcher, Morbid Opportunist, Solemn are prime targets. Skip paying if the yard has nothing worth returning.
+Core plan: self-mill and discard (Terra, Faithless Looting, Seasoned Pyromancer, Stitcher's Supplier, Grave Researcher, Siegfried) fill the yard, then Priest of Fell Rites, Karmic Guide, Victimize, Reanimate, Stitch Together, Alesha, General Leo Cristophe pull the biggest hit back for cheap.
+Entomb and Buried Alive exist to set up a reanimation target — hold until you know which big creature you want back (Meteor Golem for removal, Aurelia to close, a Summon for its ETB), don't fire blind early.
+Reanimate/Stitch Together/Victimize/Priest of Fell Rites are the payoff spells — hold if the graveyard has no good target; better to wait a turn than reanimate a mediocre creature.
+Karmic Guide + Priest of Fell Rites/Victimize is a loop with any sac outlet if a 0-cost creature is in play, but only worth doing if it actually closes the game or rebuilds a wiped board.
+Meteor Golem and Loran of the Third Path are ETB removal — best value coming off reanimation (cheap to recur) rather than hard-cast; hold hard-casting for when there's an actual problem permanent.
+Ruinous Ultimatum and Legions to Ashes are one-sided answers — save for the biggest threat/best board on one opponent, not a minor annoyance; these are the deck's only real answers to a scary artifact/enchantment.
+Mortify and Bedevil are flexible removal — hold up rather than casting proactively; use reactively on a board wipe threat, a combo piece, or a blocker only when attacking.
+Aurelia, the Warleader untaps attackers and grants an extra combat on her first attack each turn — attack with her whenever safely possible, she's the deck's clock.
+Blade Historian gives attacking creatures double strike; Raphael, the Nightwatcher does the same while attacking — attack wide/big the turn either is out, this is a haymaker window, not a turn to hold back creatures.
+Pitiless Plunderer, Morbid Opportunist, Solemn Simulacrum profit passively from creatures dying — don't sacrifice creatures just to trigger these, only sac when there's already a reason (Victimize, Priest of Fell Rites, a blocker about to die anyway).
+Swiftfoot Boots: hold for the commander or the best reanimated threat, not the first creature played.
+Key to the City and Rogue's Passage (unblockable) are best spent making a big combat-damage trigger connect (Terra, Squall, Locke, Alesha) — don't fire them without a reason, and don't waste mana on Rogue's Passage early when nothing needs to get through yet.
+Sol Ring, Arcane Signet, Chromatic Lantern, Talisman of Conviction/Indulgence: play on sight, pure development, no reason to hold.
+Fetch lands, Evolving Wilds, Demolition Field: crack for fixing whenever convenient; also feeds Terra's mill/graveyard plan, so no need to hold them back.
+Squall, SeeD Mercenary and Locke, Treasure Hunter both reward connecting with combat damage — protect these once attacking rather than trading them into unnecessary blocks.
+Millikin and The Warring Triad tap for mana while filling the graveyard — treat as ramp first; The Warring Triad isn't a creature (can't attack or block) until 8+ cards are in the graveyard.
+Raph & Leo, Sibling Rivals, Turncoat Kunoichi, Shadow, and Joshua, Phoenix's Dominant have Sneak-style alt-costs that require bouncing an unblocked attacker — only use that line when already attacking with something safe to bounce; otherwise just hard-cast them normally.
+Priest of Fell Rites and Karmic Guide have Echo/Unearth costs — don't feel obligated to pay Karmic Guide's echo if the ETB value is already banked and the body isn't needed; sacrificing it to its own echo is fine.
+Posture in 4-player games: develop and fill the graveyard in early turns rather than racing — the deck wants a stocked yard before its reanimation spells get efficient. Once a strong reanimation target or Aurelia is online, shift to aggressive attacking; this is a midrange deck that closes fast once assembled, not a slow controller.
+Don't dump the whole hand each turn — sequence discard/mill effects across turns so graveyard payoffs (Terra's trigger, Twilight Diviner, Celes, Pitiless Plunderer) have live targets on future turns instead of one empty burst.
+Avoid firing reanimation spells the turn before an opponent's likely board wipe if the best card in hand is a big creature — keep it as insurance and reanimate after the wipe instead.
