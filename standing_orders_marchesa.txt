@@ -1,0 +1,22 @@
+Win by grinding value into a kill, not a single combo: Gray Merchant drain after wide devotion, Insurrection alpha strike, or attrition damage from sac loops (Grave Pact/Attrition/Mahadi/Goblin Bombardment). Play patient midrange.
+Marchesa's dread-token recursion means creature deaths are often fine, not disasters — don't panic-block or overvalue chump-blocking key creatures while she's on board.
+Sac outlets (Ashnod's Altar, Phyrexian Altar, Viscera Seer, Carrion Feeder, Goblin Bombardment, Warren Soultrader) exist to rebuy ETBs and feed death triggers, not to sac creatures for no reason. Only sac when a death trigger (Midnight Reaper, Grim Haruspex, Ayara's Oathsworn, Mikaeus undying, Yahenni) or ETB (Baleful Strix, Chupacabra, Disciple of Bolas, Solemn Simulacrum) pays off, or to save a creature from removal/wipe in response.
+Yawgmoth is a late-game engine: only activate the sac/-1/-1 ability for a real payoff (a card off Reaper/Strix-type death, or lethal damage), and watch your own life total — don't drain below ~10.
+Ashnod's/Phyrexian Altar mana should fund a specific spell in hand immediately, not sit unused.
+Goblin Bombardment: save sac-for-damage to close out a player or kill a key blocker/attacker, not for random value.
+Hold Counterspell, Mana Drain, Narset's Reversal for the opponent's board wipe, a game-ending spell, or removal/counter aimed at Marchesa or your engine — don't counter small value spells early.
+Damnation and Blasphemous Act: hold until you're behind on board or facing lethal, then wipe. Never cast while your board is ahead.
+Rakdos Charm, Bedevil, Terminate, Infernal Grasp, Ravenous Chupacabra: save for the biggest threat (combo piece, wipe payoff, evasive attacker), not the first creature that appears.
+Untimely Malfunction and Come Back Wrong are situational tricks (counter/bounce a spell, reanimate) — hold for a real target, don't cast proactively.
+Insurrection is a one-shot finisher: only cast when total power taken+your board can kill that turn, with minimal counterspell risk from opponents' open mana.
+Lightning Greaves / Swiftfoot Boots protect Marchesa (or Yawgmoth) from removal — equip her the turn she resolves or right before attacking, not onto a random creature.
+Skullclamp: only sac expendable 1-toughness fodder (dread tokens, Iron Apprentice) into it for cards; never clamp a creature you want to keep.
+Gray Merchant is a finisher — sequence after board/devotion development, not as an early curve play.
+Diabolic Intent and Imperial Recruiter: tutor for whatever the board state actually needs (wipe, removal, missing engine piece), not reflexively on curve.
+Grave Pact / Attrition: deploy before big sac chains or combat so the punishment lands, not after value is already spent.
+Mahadi and Disciple of Bolas want a token or spare creature as fodder ready before activating — never feed your best creature in.
+Terror of the Peaks and Atsushi reward casting other big spells/creatures after they resolve — sequence them first when the hand allows.
+Glen Elendra Archmage: hold the sac-to-counter mode for a true must-answer spell (wipe, combo finisher), not anything smaller.
+Natural posture: develop mana and board through the midgame, hold up interaction on opponents' turns, and avoid dumping the whole hand — always keep one instant-speed answer back.
+Don't fire activated abilities just because mana is open with nothing else to do; every activation needs a specific target or payoff in the current board state.
+RACE TRIGGER: Marchesa is on board with an active sac-outlet+payoff engine (Grave Pact/Attrition/Mahadi/Yawgmoth) live, or Gray Merchant/Insurrection can bring a player to 0 this turn, or any opponent is below 15 life with no wipe visible from them — then attack with everything every turn until the game ends.

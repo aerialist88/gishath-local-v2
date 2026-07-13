@@ -554,20 +554,28 @@ def coach_available() -> bool:
 
 # Coached games pay real wall time for LLM calls, and Forge's -c clock counts
 # wall seconds — so a coached game gets a much longer clock or every match
-# would end as a clock-draw mid-thought.
-COACHED_GAME_TIMEOUT_S = 2400
-COACHED_SUBPROCESS_TIMEOUT_S = 3000
-COACH_JAVA_TIMEOUT_MS = 100_000  # Java-side per-fetch cap; > coach.TURN_CALL_TIMEOUT_S
+# would end as a clock-draw mid-thought. Sized for the two-checkpoint coach
+# with enriched (oracle-grounded) prompts: measured 2026-07-13, ~46s median
+# per call, ~50-70 calls/game after the no-casts combat-skip → budget 90 min.
+COACHED_GAME_TIMEOUT_S = 5400
+COACHED_SUBPROCESS_TIMEOUT_S = 6000
+COACH_JAVA_TIMEOUT_MS = 150_000  # Java-side per-fetch cap; > coach.TURN_CALL_TIMEOUT_S
 
 
-def run_match(deck_ids: list[str], coach: bool = False) -> dict:
+def run_match(deck_ids: list[str], coach: bool = False, run_id: str | None = None) -> dict:
     """Play one real Commander game between the given Atelier decks.
 
     With coach=True (requires the fork build, see coach_available), every seat
     gets the LLM turn coach from atelier/coach.py: standing orders per deck +
-    per-own-turn threat ranking / hold list, enforced inside Forge's AI by the
-    forge.ai.AtelierCoach hooks. Costs ~40-60 haiku calls and adds minutes of
-    wall time per game — a deliberately opt-in mode.
+    per-own-turn plans (pre-combat and start-of-combat checkpoints: threat
+    ranking, hold/forbid/reserve lists, posture), enforced inside Forge's AI
+    by the forge.ai.AtelierCoach hooks. Costs ~60-90 haiku calls and adds tens
+    of minutes of wall time per game — a deliberately opt-in mode.
+
+    run_id lets the caller mint the coach's spend-log run_id BEFORE this
+    (blocking) call starts, so a session record can carry it immediately and
+    a live poll can total the spend mid-game instead of only after the fact.
+    Falls back to CoachServer's own uuid-based id when omitted.
 
     Returns {result: <parsed session result>, raw_log: str, names_by_seat,
     coach: {calls, failures} when coached}. Raises ValueError on setup
@@ -598,7 +606,7 @@ def run_match(deck_ids: list[str], coach: bool = False) -> dict:
     game_timeout, subprocess_timeout = GAME_TIMEOUT_S, SUBPROCESS_TIMEOUT_S
     if coach:
         from . import coach as coach_mod  # deferred: pulls in claude_cli
-        coach_server = coach_mod.CoachServer(decks_by_seat)
+        coach_server = coach_mod.CoachServer(decks_by_seat, run_id=run_id)
         port = coach_server.start()   # generates/loads standing orders first
         coach_props = [
             f"-Datelier.coach.url=http://127.0.0.1:{port}/coach",
@@ -639,5 +647,5 @@ def run_match(deck_ids: list[str], coach: bool = False) -> dict:
     out = {"result": parse_log(raw, names_by_seat, land_names), "raw_log": raw, "names_by_seat": names_by_seat}
     if coach_server is not None:
         out["coach"] = {"calls": coach_server.calls, "failures": coach_server.failures,
-                        "run_id": coach_server.run_id}
+                        "run_id": coach_server.run_id, "plans": coach_server.plans}
     return out

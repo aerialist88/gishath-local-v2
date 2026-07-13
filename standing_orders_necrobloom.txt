@@ -1,0 +1,24 @@
+Win cons: Craterhoof Behemoth alpha strike after wide board (tokens/lands-as-threats); Avenger of Zendikar + landfall triggers; Splendid Reclamation off a full graveyard of lands for a huge landfall turn; The Gitrog Monster + Field of the Dead / Scute Swarm value grind; Cultivator Colossus into a chain of land drops for a big attack. Rarely a fast combo kill — this deck grinds and then overruns.
+Posture: develop and grind early-midgame, avoid drawing removal aggro; hang back from combat unless ahead on board; become the threat only once ramped past the table (turn 6+) or when another player is about to win.
+The Necrobloom: only sac creatures to it when you have graveyard lands to return AND a land drop still available that turn; don't feed it small creatures with no lands in yard.
+Ramp (Birds, Farseek, Nature's Lore, Three Visits, Cultivate, Kodama's Reach, Sakura-Tribe Elder, Harrow, Roiling Regrowth): play on curve, no reason to hold these.
+Sakura-Tribe Elder: hold the sac ability until blocking or about to die, not on ETB.
+Azusa/Dryad of the Ilysian Grove/Oracle of Mul Daya/Wayward Swordtooth: play immediately for extra land drops; only play extra lands from hand if you have them, don't crack fetches early just to "use" the drop.
+Crucible of Worlds + fetches/Life from the Loam: only sac fetches when a land is in hand to replay, or to enable Necrobloom/Titania value; don't crack fetches for no reason.
+Titania, Protector of Argoth: land dying triggers a 5/3 Elemental — sequence land sacrifice/fetch cracks after Titania is out, not before.
+World Shaper: only good with an empty-ish hand and graveyard full of lands; don't rush it out with few lands in yard. Protect it once out — it pays off next turn.
+Removal (Swords to Plowshares, Path to Exile, Assassin's Trophy, Beast Within, Damn): hold as reactive answers to the biggest threat on board or a lethal attacker, don't cast proactively on small stuff.
+Darkblast/Retreat to Hagra/Golgari Grave-Troll/Stinkweed Imp: dredge only when the graveyard has value (lands for Loam/Necrobloom) and hand is low; don't dredge away a full hand.
+Life from the Loam: hold discard-outlet activations for when you have excess lands or want to loop Bojuka Bog/fetches; don't discard your only gas.
+Demonic Tutor/Green Sun's Zenith: save for finding the actual win condition (Craterhoof, Avenger, Splendid Reclamation piece) once the board can support it, not early value creatures.
+Entomb + Reanimate/Dread Return: hold as a combo package — entomb Craterhoof or Sun Titan only when you can immediately reanimate same turn or next; don't entomb without a reanimation spell in hand.
+Trail of Crumbs/Tireless Provisioner: activate only after a landfall trigger this turn, not speculatively.
+Knight of the Reliquary: grows with lands in yard; attack once it's a real threat, don't chump early.
+Courser of Kruphix/Oracle of Mul Daya: play lands off top when safe; don't reveal into removal-heavy boards if it telegraphs a bomb.
+Combat tricks/protection (Beast Within, Swords, Path): hold one removal spell back as a combat trick / protection for your commander or key engine piece, don't tap out completely once you have 2+ threats assembled.
+Craterhoof Behemoth: never cast without a wide board (5+ creatures/tokens) and enough mana to swing for lethal or near-lethal that turn; this is the finisher, not a value creature.
+Splendid Reclamation: only cast once 6+ lands are in the graveyard; otherwise it's a wasted card.
+Avoid firing activated mana abilities (Krosan Verge, Yavimaya, etc.) unless the mana will be used same turn.
+Glacial Chasm: only when facing lethal damage or to stabilize; upkeep life/land cost is real, don't play it as a value land.
+Bloodghast/Golgari Thug/Ruthless Ripper: cheap recursive/utility bodies, fine to deploy early as blockers or graveyard fuel, don't overvalue them as attackers.
+RACE TRIGGER: Craterhoof Behemoth is in hand or safely reanimatable AND board has 5+ creatures/tokens whose total power (after Craterhoof's +X/+X and trample) would be lethal to at least one opponent — attack with everything that turn.

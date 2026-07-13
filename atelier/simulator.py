@@ -328,8 +328,18 @@ class SimulationManager:
         """Play the game on the Forge rules engine, then have the LLM write the
         deck reports FROM the engine's log (grounded; non-fatal if it fails).
         Returns the session update dict."""
+        # Mint the coach's spend-log run_id up front and stash it on the
+        # (still-running) session BEFORE this blocking call, so the match
+        # page can poll a live running cost for the whole 15-20 minute game
+        # instead of only learning the total once it's over.
+        coach_run_id = f"coach-{session_id}" if grounding.get("coach") else None
+        if coach_run_id:
+            with self._lock:
+                session = self._sessions.get(session_id)
+                if session is not None:
+                    session["coach_run_id"] = coach_run_id
         match = forge_engine.run_match([p["deck_id"] for p in grounding["players"]],
-                                       coach=bool(grounding.get("coach")))
+                                       coach=bool(grounding.get("coach")), run_id=coach_run_id)
         parsed = match["result"]
         # Receipts: the engine's full typed log, plus the structured per-turn
         # detail export (every parsed engine event — casts with targets,

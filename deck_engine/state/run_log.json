@@ -401,5 +401,58 @@
       "G"
     ],
     "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-12T01:44:37.786769+00:00",
+    "commander": "Adamaro, First to Desire",
+    "archetype": "Mono-red Adamaro hand-inflation punisher beatdown (\"the table's hand is my clock\")",
+    "status": "success",
+    "colors": [
+      "R"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-13T02:11:05.757593+00:00",
+    "commander": "Ygra, Eater of All",
+    "archetype": "Golgari \"the whole table is Food\" forced-sacrifice aristocrats-voltron",
+    "status": "success",
+    "colors": [
+      "B",
+      "G"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-13T08:14:15.652850+00:00",
+    "commander": "Toluz, Clever Conductor",
+    "archetype": "Esper \"discard-as-vault\" self-loot control \u2014 exile-storage value engine with a death-triggered hand refill",
+    "status": "success",
+    "colors": [
+      "B",
+      "U",
+      "W"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-13T12:44:31.414751+00:00",
+    "commander": "Nashi, Moon Sage's Scion",
+    "archetype": "Mono-black ninjutsu \"life-as-mana\" combat-theft & life-drain value",
+    "status": "success",
+    "colors": [
+      "B"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-13T13:21:05.535645+00:00",
+    "commander": "Koh, the Face Stealer",
+    "archetype": "Mono-black Koh \"rotating toolbox\" \u2014 exile the table's dead creatures, then pay 1 life each turn to wear one at a time, stacking its activated/triggered abilities onto Koh as an on-demand utility body",
+    "status": "success",
+    "colors": [
+      "B"
+    ],
+    "error_summary": ""
   }
 ]

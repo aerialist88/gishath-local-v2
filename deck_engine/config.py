@@ -106,18 +106,22 @@ DEDUPE_ARCHETYPE_SOFT_DAYS: int = 30  # soft: bias away from, don't hard-block
 # sonnet drafts ≈ 3 small ideates + 1 big build).
 DRAFT_SUBAGENTS: int = 3   # complete decks drafted in parallel before the judge picks one
 
-# Model tier per stage. Opus on `select` and `optimize` only (2026-07-01,
-# after a real run's deck was built around a hallucinated commander ability —
-# see agent_pipeline.py's oracle-text grounding for the actual fix; Opus here
-# is the fact-checking backstop on top of that, not a substitute for it).
+# Model tier per stage. Opus on `judge` and `optimize` only (2026-07-13 swap:
+# judge sonnet->opus, select opus->sonnet, roughly cost-neutral). Judge is the
+# highest-leverage single call — it picks among 3 complete 99s and its
+# cherry-pick swaps ship straight into the final deck — and it's where the
+# Forge-sim quality gap (synergy piles with zero interaction) has to be
+# caught, since the quota scorecard counts roles but can't weigh them.
+# Select's hard constraints (dedupe, eligibility) are enforced in code and a
+# mediocre concept still builds fine, so it doesn't need the priciest tier.
 # Sonnet everywhere else — Opus is ~4-5x Sonnet cost (PRD §4 constraints), and
 # draft/validate_repair are grounded in real oracle text now, so the marginal
 # value of Opus there is lower than on the single-call stages. `draft` runs
 # DRAFT_SUBAGENTS calls in parallel, so an Opus tier there multiplies.
 MODEL_TIERS: dict = {
-    "select": os.environ.get("DECK_ENGINE_SELECT_MODEL", "opus"),
+    "select": os.environ.get("DECK_ENGINE_SELECT_MODEL", "sonnet"),
     "draft": "sonnet",
-    "judge": "sonnet",
+    "judge": os.environ.get("DECK_ENGINE_JUDGE_MODEL", "opus"),
     "validate_repair": "sonnet",
     "optimize": os.environ.get("DECK_ENGINE_OPTIMIZE_MODEL", "opus"),
     # PRD v4 amendment T4: card_tags/mechanic-token extraction moved OFF Opus
@@ -239,6 +243,10 @@ THINKING_BUDGET_BY_MODEL: dict = {
     "haiku": int(os.environ.get("DECK_ENGINE_THINKING_HAIKU_TOKENS", str(THINKING_BUDGET_TOKENS))),
     "sonnet": int(os.environ.get("DECK_ENGINE_THINKING_SONNET_TOKENS", "0")),
     "opus": int(os.environ.get("DECK_ENGINE_THINKING_OPUS_TOKENS", "0")),
+    # fable must be listed explicitly: an unlisted model falls back to the
+    # global 6000, which would silently buy redacted thinking at the most
+    # expensive tier's output prices.
+    "fable": int(os.environ.get("DECK_ENGINE_THINKING_FABLE_TOKENS", "0")),
 }
 
 # Per-STAGE thinking budgets, keyed by model tier key — outranks the per-model
@@ -256,6 +264,11 @@ THINKING_BUDGET_BY_MODEL: dict = {
 # it bought the zero-repair structural soundness without the overage.
 THINKING_BUDGET_BY_STAGE: dict = {
     "draft": int(os.environ.get("DECK_ENGINE_THINKING_DRAFT_TOKENS", "6000")),
+    # judge moved to opus 2026-07-13 for deeper deliberation over the three
+    # drafts; thinking on by default so the upgrade actually buys deliberation,
+    # not just a bigger model reading the same prompt. Single call per run, so
+    # the worst case is ~6k output-billed tokens (~$0.15 at opus rates).
+    "judge": int(os.environ.get("DECK_ENGINE_THINKING_JUDGE_TOKENS", "6000")),
 }
 
 # Claude CLI binary — override via env if `claude` isn't on PATH in the
@@ -349,15 +362,32 @@ def _apply_ui_settings() -> None:
     tiers = settings.get("model_tiers")
     if isinstance(tiers, dict):
         for stage_key, tier in tiers.items():
-            if stage_key in MODEL_TIERS and tier in ("haiku", "sonnet", "opus"):
+            if stage_key in MODEL_TIERS and tier in ("haiku", "sonnet", "opus", "fable"):
                 env_var = {
                     "select": "DECK_ENGINE_SELECT_MODEL",
+                    "judge": "DECK_ENGINE_JUDGE_MODEL",
                     "optimize": "DECK_ENGINE_OPTIMIZE_MODEL",
                     "card_tagger": "DECK_ENGINE_CARD_TAGGER_MODEL",
                 }.get(stage_key)
                 if env_var and os.environ.get(env_var):
                     continue
                 MODEL_TIERS[stage_key] = tier
+    # Per-stage thinking budgets (0 = off). Lands in THINKING_BUDGET_BY_STAGE,
+    # the top of claude_cli's stage > model > global resolution, so a UI value
+    # decides the stage outright. An explicit env var — the same
+    # DECK_ENGINE_THINKING_<STAGE>_TOKENS pattern draft already uses — outranks
+    # the UI file, consistent with everything else here.
+    thinking = settings.get("thinking_by_stage")
+    if isinstance(thinking, dict):
+        for stage_key, tokens in thinking.items():
+            if stage_key not in MODEL_TIERS:
+                continue
+            if os.environ.get(f"DECK_ENGINE_THINKING_{stage_key.upper()}_TOKENS"):
+                continue
+            try:
+                THINKING_BUDGET_BY_STAGE[stage_key] = max(0, int(tokens))
+            except (TypeError, ValueError):
+                continue
     # Newsletter BCC list (list of addresses).
     bcc = settings.get("newsletter_bcc")
     if isinstance(bcc, list) and not os.environ.get("DECK_ENGINE_NEWSLETTER_BCC"):

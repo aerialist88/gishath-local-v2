@@ -39,10 +39,11 @@ import os
 import sqlite3
 import threading
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import httpx
 
+import price_history
 import print_index
 
 log = logging.getLogger(__name__)
@@ -447,6 +448,16 @@ def status() -> dict:
         ).fetchone()
         tiers = dict(conn.execute(
             "SELECT p.tier, COUNT(*) FROM prices p GROUP BY p.tier").fetchall())
+        # Daily mark-to-market: the pricer only snapshots when a full pass
+        # completes, so on any other day the first status poll backfills
+        # today's point from the last known prices. OR IGNORE keeps a
+        # completed pass's snapshot for today authoritative.
+        if priced:
+            conn.execute(
+                "INSERT OR IGNORE INTO value_snapshots (day, total_sgd, priced, items) "
+                "VALUES (?, ?, ?, ?)",
+                (date.today().isoformat(), round(total, 2), priced, items),
+            )
         snapshots = conn.execute(
             "SELECT day, total_sgd FROM value_snapshots ORDER BY day DESC LIMIT 30").fetchall()
     return {
@@ -457,6 +468,80 @@ def status() -> dict:
         "pricer": dict(_progress),
         "index_ready": print_index.available(),
         "value_history": [[d, v] for d, v in reversed(snapshots)],
+    }
+
+
+def _delta(history: list, days: int) -> dict | None:
+    """Change between the latest snapshot and the last one at/before `days` ago.
+
+    If the history is younger than the window, falls back to the earliest
+    snapshot and reports the actual span, so the UI never claims a "30d"
+    change it doesn't have data for.
+    """
+    if len(history) < 2:
+        return None
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    older = [(d, v) for d, v in history[:-1] if d <= cutoff]
+    base_day, base_val = older[-1] if older else history[0]
+    last_day, last_val = history[-1]
+    span = (date.fromisoformat(last_day) - date.fromisoformat(base_day)).days
+    if span <= 0:
+        return None
+    change = round(last_val - base_val, 2)
+    return {
+        "change": change,
+        "pct": round(change / base_val * 100, 1) if base_val else None,
+        "days": span,
+    }
+
+
+def movers(days: int = 30, limit: int = 5) -> dict:
+    """Top gainers/losers among owned cards, from the local price-history DB.
+
+    Compares each owned card's earliest vs latest daily-min price within the
+    window; `impact` weights the per-card change by copies owned, which is
+    what actually moves the collection's value. Only cards you've searched
+    (or the pricer has priced) have history — `tracked` says how many do.
+    """
+    with _connect() as conn:
+        counts = dict(conn.execute(
+            "SELECT name, SUM(count) FROM items GROUP BY name").fetchall())
+    hist = price_history.get_history(list(counts), days=days)
+    rows = []
+    for name, h in hist.items():
+        pts = h.get("points") or []
+        if len(pts) < 2:
+            continue
+        (d0, p0), (d1, p1) = pts[0], pts[-1]
+        change = round(p1 - p0, 2)
+        if p0 <= 0 or change == 0:
+            continue
+        count = counts.get(name) or 1
+        rows.append({
+            "name": name, "count": count,
+            "from": p0, "to": p1, "from_day": d0, "to_day": d1,
+            "change": change, "pct": round(change / p0 * 100, 1),
+            "impact": round(change * count, 2),
+        })
+    rows.sort(key=lambda r: r["impact"])
+    return {
+        "gainers": [r for r in reversed(rows) if r["impact"] > 0][:limit],
+        "losers": [r for r in rows if r["impact"] < 0][:limit],
+        "tracked": len(hist),
+        "window_days": days,
+    }
+
+
+def value_summary() -> dict:
+    """Everything the collection Value panel needs in one call."""
+    with _connect() as conn:
+        history = conn.execute(
+            "SELECT day, total_sgd FROM value_snapshots ORDER BY day").fetchall()
+    return {
+        "history": [[d, v] for d, v in history],
+        "delta_7d": _delta(history, 7),
+        "delta_30d": _delta(history, 30),
+        "movers": movers(30),
     }
 
 

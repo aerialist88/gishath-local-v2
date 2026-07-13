@@ -1,0 +1,22 @@
+Win cons: big Exsanguinate/Boltwave/City on Fire X-spell after a mana burst, or grinding chip damage via Guttersnipe/Ashling/Storm-Kiln Artist/Electro triggers off cheap spells. Kuja backside (Trance Kuja) wants you casting many spells in a turn to flip and close games.
+Core mana-burst line: Dark Ritual, Seething Song, Mana Geyser, Battle Hymn, Jeska's Will feed one big turn. Hold these until you also hold (or will draw into) a payoff — do not crack them just to play a 2-drop early.
+Do not fire Dark Ritual/Seething Song/Mana Geyser on curve turns 1-3 unless immediately casting Kuja or a ritual chain into real damage. Wasting them empty-handed loses the game.
+Sol Ring, Arcane Signet, Talisman of Indulgence, Ruby Medallion, Command Tower/War Room/Rakdos Carnarium: play on sight, always good, no need to hold.
+Hold Chaos Warp, Terminate, Bedevil, Saw in Half, Cornered by Black Mages, Tragic Slip as removal for the biggest threat on board (commander, combo piece, flier alpha-striking you) — do not spend on small creatures.
+Hold Not Dead After All and Feign Death for when Kuja or another key creature is about to die or already died — reanimate at end of opponent's turn if possible, not proactively.
+Deflecting Swat and Transpose are reactive tricks: hold up mana, use only in response to a targeted removal/counter spell aimed at your stuff, or to redirect a wipe/bomb spell. Never cast Deflecting Swat with no valid target on the stack.
+Lightning Greaves and Command Beacon protect Kuja specifically — equip Greaves to Kuja the turn you play it or the turn before you tap out for a big spell, not on random creatures.
+Chandra's Ignition and City on Fire are one-shot damage plays: cast only when you can point them at an opponent (or board) for lethal or near-lethal, not as removal on a single blocker.
+Wild Magic Surge and Untimely Malfunction are swingy/random — only cast when behind or when the board favors chaos (multiple opponents developed, you are not overextended into a wipe).
+Exsanguinate and Boltwave: hold as finishers, cast for max X only, ideally after a ritual turn; do not cast for X=1-2 just to "get value."
+Guttersnipe, Ashling Flame Dancer, Storm-Kiln Artist, Electro, Coruscation Mage: deploy early, they are engines not targets to protect at all costs — fine to lose them after they've triggered a few times.
+Faithless Looting, Light Up the Stage, Sign in Blood, Demand Answers: card draw/filtering, cast whenever mana is free, no need to hold.
+Fiery Emancipation: play only when you have a follow-up burn spell ready same turn or next turn to abuse the damage tripling; otherwise it's a do-nothing that invites removal.
+Neheb, the Eternal and Birgi/Harnfel: mana/card engines, play on curve, they enable the ritual-into-X-spell line.
+Activated abilities (Black Mage's Rod, Cursed Mirror, Boggart Trawler, Mysidian Elder, Harmonic Prodigy): only activate when there is a concrete payoff this turn (lethal push, saving a creature, enabling a combat trick) — do not activate on autopilot every turn if mana is otherwise needed for spells in hand.
+Circle of Power: hold mana up specifically to protect against a board wipe or a lethal spell aimed at you; don't tap out if you have it and expect a wipe.
+The Darkness Crystal: ramp/fixing, play early, low risk.
+Natural posture: this deck is a control-into-burst-kill deck, not an early racer. Durdle behind removal and card draw turns 1-4, avoid overextending into wipes, then look for the turn you can chain rituals into a lethal X-spell or alpha strike, usually turns 5-7.
+In 4-player pods, avoid being the first to tap out for a huge turn unless it's actually lethal or near-lethal to at least one opponent — partial commitments just paint a target on you.
+Prioritize killing the most dangerous opposing threat/commander over dealing incidental damage; hold single-target removal for that rather than using it reactively on small stuff.
+If Kuja dies, prioritize the reanimation spells (Not Dead After All/Feign Death) over recasting other creatures that turn.

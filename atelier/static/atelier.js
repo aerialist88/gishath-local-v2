@@ -883,6 +883,16 @@ function appendBudgetSwapRows(swaps) {
   for (const sw of swaps) panel.insertAdjacentHTML("beforeend", swapRowHTML(sw, true));
 }
 
+// Keeps a bench-stream box scrolled to its newest text as chunks stream in,
+// but only while the reader is already at (or near) the bottom — if they've
+// scrolled up to reread earlier reasoning, incoming chunks won't yank them
+// back down.
+function stickBenchScroll(streamBox) {
+  if (!streamBox) return;
+  const distanceFromBottom = streamBox.scrollHeight - streamBox.scrollTop - streamBox.clientHeight;
+  if (distanceFromBottom < 24) streamBox.scrollTop = streamBox.scrollHeight;
+}
+
 function applyLiveEvent(e) {
   // Text/status patches stay exactly as before — highest-frequency path,
   // already correct (direct textContent mutation on a persisting node).
@@ -897,6 +907,7 @@ function applyLiveEvent(e) {
           bench.textContent = "";
         }
         bench.textContent = (bench.textContent + e.chunk).slice(-1200);
+        stickBenchScroll(bench.closest(".bench-stream"));
       } else rerenderSoon();
       return;
     }
@@ -919,6 +930,7 @@ function applyLiveEvent(e) {
         }
       }
       think.textContent = (think.textContent + e.chunk).slice(-1200);
+      stickBenchScroll(streamBox);
       return;
     }
     case "call_status": {
@@ -1341,6 +1353,29 @@ async function loadMatchHistory() {
   });
 }
 
+// Compact live cost tracker for a coached match — same $ + call-count idea
+// as the deck pipeline's crucible spend widget, sized for the match-running
+// panel rather than the workshop's live-view sidebar.
+function matchSpendHTML(spend) {
+  if (!spend) return "";
+  const calls = spend.stages ? spend.stages.length : 0;
+  return `<div class="plaque-dark crucible" id="match-crucible" style="margin-top:12px">
+    <div class="caps" style="color:var(--brass);margin-bottom:4px">Coach spend</div>
+    <div class="amount" id="match-crucible-amount">$${spend.total_cost_usd.toFixed(4)}</div>
+    <div class="mono" style="font-size:9.5px;color:var(--faint);margin-top:4px" id="match-crucible-meta">${calls} call${calls === 1 ? "" : "s"} served${spend.had_errors ? " · some failed" : ""}</div>
+  </div>`;
+}
+
+function updateMatchSpendDOM(spend) {
+  if (!spend) return;
+  const amount = $("#match-crucible-amount");
+  const meta = $("#match-crucible-meta");
+  if (!amount || !meta) return;
+  const calls = spend.stages ? spend.stages.length : 0;
+  amount.textContent = "$" + spend.total_cost_usd.toFixed(4);
+  meta.textContent = `${calls} call${calls === 1 ? "" : "s"} served${spend.had_errors ? " · some failed" : ""}`;
+}
+
 async function watchSimulation(id, button, coached) {
   const resultEl = $("#match-result");
   resultEl.innerHTML = `<div class="match-running"><span class="pulse">Playing the game to a finish…</span><small>${coached
@@ -1349,7 +1384,16 @@ async function watchSimulation(id, button, coached) {
   const poll = async () => {
     try {
       const session = await api("/api/simulations/" + encodeURIComponent(id));
-      if (session.status === "running") { setTimeout(poll, 1500); return; }
+      if (session.status === "running") {
+        if (session.coach_spend) {
+          // Patch the tracker in place if it's already there; otherwise the
+          // first poll to see spend data grows the running panel to fit it.
+          if ($("#match-crucible")) updateMatchSpendDOM(session.coach_spend);
+          else $(".match-running")?.insertAdjacentHTML("beforeend", matchSpendHTML(session.coach_spend));
+        }
+        setTimeout(poll, 1500);
+        return;
+      }
       button.disabled = false; button.textContent = "Play another match";
       if (session.status === "failed") {
         resultEl.innerHTML = `<div class="match-error"><b>Rehearsal held for review.</b><span>${esc(session.error || "The evidence ledger could not be verified.")}</span></div>`;
@@ -1424,7 +1468,10 @@ function renderSimulation(root, session) {
     : "LLM referee · seed " + esc(g.seed);
   // Coach receipts ({calls, failures, run_id}) ride on the result — shown so
   // a coached game's cost and reliability are auditable from the session view.
+  // coach_spend (session-level, from spend_log) has the actual $ total —
+  // present whenever coach_run_id was set, including for a running game.
   const coach = result.coach;
+  const coachSpend = session.coach_spend;
   root.innerHTML = `<section class="simulation-result">
     <div class="result-head"><div><div class="caps">Simulated game · ${engineLabel}</div>
       <h2>${champ.commander ? esc(champ.commander) + " takes the table" : "Game complete"}</h2>
@@ -1433,7 +1480,7 @@ function renderSimulation(root, session) {
       <span class="seal-badge">${g.engine === "forge" ? "Engine-tracked zones" : "Decklists verified"}</span></div>
     <div class="source-strip">${(g.players || []).map((p) => `<span>${dot(p.seat, 6)} Player ${esc(p.seat)}: ${esc(p.commander)} · ${(p.cards || {}).mulligans || 0} mulligan${(p.cards || {}).mulligans === 1 ? "" : "s"}${(p.cards || {}).kept_hand ? ` · kept ${esc(p.cards.kept_hand)}` : ""}</span>`).join("")}${g.rules_effective_date ? `<span>CR effective ${esc(g.rules_effective_date)}</span>` : ""}</div>
     ${g.engine === "forge" && session.id ? `<p class="match-note" style="margin-top:8px">Receipts: <a href="/api/simulations/${esc(session.id)}/details">per-turn detail (JSON)</a> · <a href="/api/simulations/${esc(session.id)}/forge-log">raw Forge log</a></p>` : ""}
-    ${coach ? `<p class="match-note" style="margin-top:4px">Coach: ${esc(coach.calls)} turn plan${coach.calls === 1 ? "" : "s"} served${coach.failures ? ` · ${esc(coach.failures)} failed (stock AI took those turns)` : " · no failures"}${coach.run_id ? ` · spend log run <span class="mono">${esc(coach.run_id)}</span>` : ""}</p>` : ""}
+    ${coach ? `<p class="match-note" style="margin-top:4px">Coach: ${esc(coach.calls)} turn plan${coach.calls === 1 ? "" : "s"} served${coach.failures ? ` · ${esc(coach.failures)} failed (stock AI took those turns)` : " · no failures"}${coachSpend ? ` · ${money(coachSpend.total_cost_usd, "$")} spent` : coach.run_id ? ` · spend log run <span class="mono">${esc(coach.run_id)}</span>` : ""}</p>` : ""}
     ${result.opening_note && winner.method ? `<p class="match-note">${markCards(result.opening_note)}</p>` : ""}
     <div style="margin-top:14px">
       <div class="caps" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:baseline;gap:12px">
@@ -1618,8 +1665,10 @@ async function viewRules() {
         <div class="rule-panel-body" style="gap:0">
           ${stages.map(([key, label, note]) => `<div class="workforce-row">
             <span class="stage">${label}</span><span class="note">${note}</span>
-            <div style="display:flex;gap:4px">${["haiku", "sonnet", "opus"].map((tier) =>
-              `<button class="tier-chip ${s.model_tiers[key] === tier ? "active" : ""}" data-stage="${key}" data-tier="${tier}">${tier}</button>`).join("")}</div>
+            <div style="display:flex;gap:4px">${["haiku", "sonnet", "opus", "fable"].map((tier) =>
+              `<button class="tier-chip ${s.model_tiers[key] === tier ? "active" : ""}" data-stage="${key}" data-tier="${tier}">${tier}</button>`).join("")}<button
+              class="tier-chip think-chip ${s.thinking_by_stage[key] > 0 ? "active" : ""}" data-think-stage="${key}"
+              title="extended thinking (~${(s.thinking_default_tokens || 6000).toLocaleString()} tokens — bills as output tokens)">think</button></div>
           </div>`).join("")}
         </div>
       </div>
@@ -1665,11 +1714,18 @@ async function viewRules() {
       tog.classList.toggle("on", state[tog.dataset.key]);
     };
   });
-  document.querySelectorAll(".tier-chip").forEach((chip) => {
+  document.querySelectorAll(".tier-chip[data-tier]").forEach((chip) => {
     chip.onclick = () => {
       state.model_tiers[chip.dataset.stage] = chip.dataset.tier;
       document.querySelectorAll(`.tier-chip[data-stage="${chip.dataset.stage}"]`).forEach((c) =>
         c.classList.toggle("active", c === chip));
+    };
+  });
+  document.querySelectorAll(".think-chip").forEach((chip) => {
+    chip.onclick = () => {
+      const key = chip.dataset.thinkStage;
+      state.thinking_by_stage[key] = state.thinking_by_stage[key] > 0 ? 0 : (s.thinking_default_tokens || 6000);
+      chip.classList.toggle("active", state.thinking_by_stage[key] > 0);
     };
   });
   const bccBox = $("#bcc-box");

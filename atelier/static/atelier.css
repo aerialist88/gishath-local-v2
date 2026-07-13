@@ -416,14 +416,23 @@ main { min-height: calc(100vh - 70px); }
 .bench-angle { font-size: 10.5px; letter-spacing: 1px; text-transform: uppercase; color: var(--ink3); }
 .bench-stream {
   padding: 14px 16px; font-family: var(--mono); font-size: 11.5px; line-height: 1.65; color: #4a3a1d;
-  min-height: 118px; max-height: 210px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end;
-  word-break: break-word;
+  min-height: 118px; max-height: 210px; overflow-y: auto; display: flex; flex-direction: column;
+  word-break: break-word; scrollbar-width: thin; scrollbar-color: var(--panel-border3) transparent;
 }
+/* margin-top:auto on the first child (not justify-content:flex-end on the
+   container) bottom-anchors short content while staying genuinely scrollable
+   once it overflows — flex-end + overflow:auto is a known Chromium quirk
+   where scrollHeight never exceeds clientHeight, so nothing scrolls. */
+.bench-stream > *:first-child { margin-top: auto; }
+.bench-stream::-webkit-scrollbar { width: 6px; }
+.bench-stream::-webkit-scrollbar-thumb { background: var(--panel-border3); border-radius: 3px; }
+.bench-stream::-webkit-scrollbar-track { background: transparent; }
 .stream-text.placeholder { color: var(--faint); font-style: italic; }
 /* Extended-thinking stream — the model's reasoning, shown above the reply.
-   No max-height of its own: the chunk cap in atelier.js bounds its length and
-   .bench-stream's justify-content:flex-end clips it from the top, so the
-   reasoning naturally scrolls away as the visible reply grows beneath it. */
+   No max-height of its own: the chunk cap in atelier.js bounds its length.
+   .bench-stream's justify-content:flex-end + overflow-y:auto keeps the box
+   scrolled to the newest text by default, while letting the reader scroll
+   up to see reasoning that's scrolled past. */
 .stream-think {
   font-style: italic; color: var(--ink3); font-size: 10.5px; line-height: 1.6;
   border-left: 2px solid var(--panel-border2); padding-left: 10px; margin-bottom: 10px;
@@ -596,6 +605,7 @@ main { min-height: calc(100vh - 70px); }
   border: 1px solid var(--panel-border2); background: transparent; color: var(--ink3); font-weight: 600; cursor: pointer;
 }
 .tier-chip.active { background: var(--plaque-bg); border-color: var(--plaque-bg); color: var(--plaque-text); }
+.think-chip { margin-left: 10px; border-style: dashed; }
 
 .email-input {
   padding: 10px 14px; border: 1px solid var(--panel-border2); border-radius: 8px; background: var(--panel2);

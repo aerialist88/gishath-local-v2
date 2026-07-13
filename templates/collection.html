@@ -104,6 +104,28 @@
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: #0f1117; }
     ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+
+    /* Value panel */
+    .value-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+    .value-head h2 { font-size: 1.05rem; font-weight: 700; color: #e2e8f0; margin: 0; }
+    .delta-badge {
+      font-size: 0.78rem; font-weight: 600; padding: 2px 10px; border-radius: 10px;
+      background: #1a1d27; border: 1px solid #374151; color: #94a3b8;
+    }
+    .delta-badge.up   { color: #4ade80; border-color: #14532d; background: #052e1b; }
+    .delta-badge.down { color: #f87171; border-color: #7f1d1d; background: #1f0f0f; }
+    .value-chart-wrap { margin-top: 12px; }
+    .value-chart-wrap svg { width: 100%; height: 130px; display: block; }
+    .axis-label { fill: #4b5563; font-size: 10px; }
+    .movers-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 14px; }
+    @media (max-width: 720px) { .movers-grid { grid-template-columns: 1fr; } }
+    .movers-title { font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+                    letter-spacing: .05em; color: #64748b; margin-bottom: 6px; }
+    table.movers { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    table.movers td { padding: 4px 0; border-bottom: 1px solid #1f2333; color: #cbd5e1; }
+    table.movers td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .mv-up { color: #4ade80; } .mv-down { color: #f87171; }
+    .value-empty { color: #64748b; font-size: 0.82rem; margin-top: 10px; }
   </style>
 </head>
 <body>
@@ -149,6 +171,18 @@
       <div class="progress-wrap"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
       <div class="mt-1" style="font-size:0.75rem; color:#4b5563;" id="progress-current"></div>
     </div>
+  </div>
+
+  <!-- Value over time + movers -->
+  <div class="card-panel p-4 mb-4" id="value-panel">
+    <div class="value-head">
+      <h2>📈 Collection value</h2>
+      <span class="delta-badge" id="delta-7d">7d —</span>
+      <span class="delta-badge" id="delta-30d">30d —</span>
+      <span class="ms-auto" style="color:#4b5563; font-size:0.75rem;" id="value-meta"></span>
+    </div>
+    <div class="value-chart-wrap" id="value-chart"></div>
+    <div class="movers-grid" id="movers"></div>
   </div>
 
   <!-- Filters -->
@@ -292,6 +326,88 @@
     // poll + live-refresh the table while the worker runs
     clearTimeout(state.pollTimer);
     if (running) state.pollTimer = setTimeout(async () => { await refreshStatus(); await loadItems(); }, 4000);
+
+    // a completed pass wrote a fresh value snapshot — redraw the value panel
+    if (p.state === "done" && state.lastPricerState !== "done") loadValue();
+    state.lastPricerState = p.state;
+  }
+
+  // ── Value panel ───────────────────────────────────────────────────────────
+  const sgd2 = n => "SGD " + Number(n).toLocaleString("en-SG", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  function deltaBadge(el, label, d) {
+    if (!d) { el.textContent = `${label} —`; el.className = "delta-badge"; return; }
+    const arrow = d.change >= 0 ? "▲" : "▼";
+    const pct = d.pct != null ? ` (${d.change >= 0 ? "+" : ""}${d.pct}%)` : "";
+    // span may be shorter than the window while history is young — say so
+    const span = d.days === label ? label + "d" : `${d.days}d`;
+    el.textContent = `${span} ${arrow} ${sgd2(Math.abs(d.change))}${pct}`;
+    el.className = "delta-badge " + (d.change >= 0 ? "up" : "down");
+  }
+
+  function valueChart(hist, w = 900, h = 130) {
+    const pad = { l: 6, r: 6, t: 8, b: 16 };
+    const vals = hist.map(p => p[1]);
+    const min = Math.min(...vals), max = Math.max(...vals);
+    const span = (max - min) || Math.max(max * 0.05, 1);
+    const lo = min - span * 0.1, hi = max + span * 0.1;
+    const x = i => pad.l + i * (w - pad.l - pad.r) / (hist.length - 1);
+    const y = v => pad.t + (1 - (v - lo) / (hi - lo)) * (h - pad.t - pad.b);
+    const pts = vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+    const line = "M" + pts.join(" L");
+    const area = line + ` L${x(vals.length - 1).toFixed(1)},${h - pad.b} L${pad.l},${h - pad.b} Z`;
+    const dots = hist.length <= 40
+      ? vals.map((v, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="2.5" fill="#c084fc"><title>${hist[i][0]}: ${sgd2(v)}</title></circle>`).join("")
+      : "";
+    return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+      <path d="${area}" fill="rgba(124,58,237,0.15)"/>
+      <path d="${line}" fill="none" stroke="#a78bfa" stroke-width="2"/>
+      ${dots}
+      <text class="axis-label" x="${pad.l}" y="${h - 3}">${hist[0][0]}</text>
+      <text class="axis-label" x="${w - pad.r}" y="${h - 3}" text-anchor="end">${hist[hist.length - 1][0]}</text>
+    </svg>`;
+  }
+
+  function moverRows(list, cls) {
+    return list.map(m => `<tr>
+      <td>${esc(m.name)}${m.count > 1 ? ` <span class="col-muted">×${m.count}</span>` : ""}</td>
+      <td class="num col-muted">${m.from.toFixed(2)} → ${m.to.toFixed(2)}</td>
+      <td class="num ${cls}">${m.change >= 0 ? "+" : ""}${m.change.toFixed(2)} (${m.pct >= 0 ? "+" : ""}${m.pct}%)</td>
+    </tr>`).join("");
+  }
+
+  async function loadValue() {
+    let v;
+    try { v = await (await fetch("/api/collection/value")).json(); }
+    catch { return; }
+    const hist = v.history || [];
+    const chart = document.getElementById("value-chart");
+    const meta = document.getElementById("value-meta");
+    deltaBadge(document.getElementById("delta-7d"), 7, v.delta_7d);
+    deltaBadge(document.getElementById("delta-30d"), 30, v.delta_30d);
+
+    if (hist.length < 2) {
+      chart.innerHTML = `<div class="value-empty">Value history builds one point per day —
+        ${hist.length ? "first snapshot recorded " + hist[0][0] + ", come back tomorrow for a line." :
+        "price the collection once to record the first snapshot."}</div>`;
+      meta.textContent = "";
+    } else {
+      chart.innerHTML = valueChart(hist);
+      meta.textContent = `${hist.length} snapshots · ${hist[0][0]} → ${hist[hist.length - 1][0]}`;
+    }
+
+    const mv = v.movers || {};
+    const movers = document.getElementById("movers");
+    const noHistory = !(mv.gainers || []).length && !(mv.losers || []).length;
+    movers.innerHTML = noHistory
+      ? `<div class="value-empty" style="grid-column:1/-1;">No per-card price movement yet
+         (${mv.tracked || 0} of your cards have price history — it accrues as you search and re-price).</div>`
+      : `<div><div class="movers-title">▲ Top gainers · ${mv.window_days}d</div>
+           <table class="movers">${moverRows(mv.gainers || [], "mv-up") ||
+             `<tr><td class="col-muted">none</td></tr>`}</table></div>
+         <div><div class="movers-title">▼ Top losers · ${mv.window_days}d</div>
+           <table class="movers">${moverRows(mv.losers || [], "mv-down") ||
+             `<tr><td class="col-muted">none</td></tr>`}</table></div>`;
   }
 
   // ── Items table ───────────────────────────────────────────────────────────
@@ -358,6 +474,7 @@
 
   refreshStatus();
   loadItems();
+  loadValue();
 </script>
 </body>
 </html>

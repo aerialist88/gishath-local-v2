@@ -1,0 +1,23 @@
+Win conditions: +1/+1 counter overrun via Tekuthal/Hardened Scales/Forgotten Ancient stacking counters, then Herald of Secret Streams or Kodama of the West Tree makes creatures unblockable for lethal. Secondary: Fathom Mage/Gyre Sage card-draw-into-mana snowball to cast Sin, Unending Cataclysm or Altered Ego as a huge threat. Tidus commander damage is a backup win, not the plan.
+Default posture: develop and go wide/tall with counters turns 1-6, stay reactive, avoid tapping out into open blue/white mana from opponents. Do not attack recklessly into bigger boards before counters or unblockable is online.
+Hold Mana Leak, Narset's Reversal, Protection Magic for opponents' board wipes, extra-turn spells, or their own combo pieces — never counter a small utility spell on turn 2-3.
+Hold Path to Exile / An Offer You Can't Refuse for the single biggest threat on board, not the first creature played; An Offer especially punishes someone about to combo off or cast a bomb.
+Farewell and Destroy Evil are one-sided-wipe tools: only cast when this deck's own board is behind or empty, never when we're ahead on counters/creatures. Farewell can exile our own graveyard/artifacts too, so check mode choice against what we need to keep.
+Collective Effort and Resourceful Defense are combat tricks/protection — hold up mana on opponents' turns or during combat, don't cast proactively on our own main phase.
+Sword of Truth and Justice, Innkeeper's Talent, Bred for the Hunt: equip/attach only onto a creature that will actually attack or survive combat that turn, not defensively.
+Walking Ballista: do not ping it down piece by piece for no reason; save counter removal for finishing off a low-toughness threat or as a last-ditch reach for lethal.
+Fathom Mage / Gyre Sage: only tap for mana or value when a counter is about to be added anyway (bounce, proliferate, Forgotten Ancient trigger) — don't sac tempo just to draw one card immediately.
+Forgotten Ancient's ability to move counters: use it right before combat to make the actual attacker/blocker big, not preemptively.
+Kodama of the West Tree landfall bounce: only bounce Nesting Grounds, bounce-lands, or a land needed for a second land drop — don't bounce a tapped-out dual for no upside.
+Nesting Grounds: hold it to relocate a counter from a creature about to die, or to reset an opponent's problematic permanent — not just to tap a land.
+Sphere Grid and Path of Discovery: passive value engines, let them sit and trigger; no activation timing decisions needed beyond normal land drops/combat.
+Yuna's Whistle and Yuna's Decision: save as blowout/tempo swings — Whistle for a surprise flash blocker or end-of-turn setup, Decision to counter a spell or force a bad attack, not on curve.
+Sin, Unending Cataclysm: this is a late-game bomb; don't cast it into an open board wipe or removal-heavy table without protection (Protection Magic/Endless Detour) in hand.
+Endless Detour: redirect removal aimed at our best counter-creature or Tidus; hold it, don't preemptively bounce our own stuff.
+Bala Ged Recovery // Sanctuary: cast the Recovery side to answer a problem permanent or recur a key card; only flip to Sanctuary land side if mana is tight.
+In 4-player pods, avoid being the first to tap out for a big spell when two+ opponents still hold up mana — bait removal/counters with a lesser creature first when possible.
+If this deck falls behind on board, prioritize ramp (Farseek, Three Visits, Kodama's Reach, Rampant Rejuvenator) and stabilizing blockers over racing.
+If this deck is ahead on counters/creatures, press the attack with unblockable enablers rather than holding back — the counters engine outscales grindy stalls.
+Arcane Signet, Sol Ring, Command Tower: play on sight, no judgement needed.
+Auron, Kimahri, Wakka, Rikku, Lulu "Guardian" creatures: mostly fine to deploy on curve as bodies/counter-synergy, but hold any with ETB removal/tuck effects for the best available target rather than the first creature seen.
+RACE TRIGGER: Herald of Secret Streams or Kodama of the West Tree is in play making the team unblockable/must-be-blocked-by-one, or total board power is 15+ with counters actively stacking — then attack with everything every turn until the game ends.

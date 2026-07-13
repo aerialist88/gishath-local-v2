@@ -15,7 +15,7 @@ from pathlib import Path
 
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 
-from deck_engine import config, run_log
+from deck_engine import config, run_log, spend_log
 
 from . import archive, art, commanders, forge_engine, own_decks, rules_reference, settings, simulator
 from .runner import MANAGER, RUNS_DIR
@@ -256,6 +256,13 @@ def simulation_detail(session_id: str):
     session = simulator.MANAGER.get(session_id)
     if session is None:
         return jsonify({"error": "rehearsal not found"}), 404
+    # coach_run_id is stashed on the session before the (blocking) coached
+    # game starts (see simulator._run_forge), so this totals real spend from
+    # the log on every poll — a live cost tracker for the whole game, same
+    # idea as the deck pipeline's crucible spend, not just a post-hoc total.
+    coach_run_id = session.get("coach_run_id")
+    if coach_run_id:
+        session = {**session, "coach_spend": spend_log.summarize_run(coach_run_id)}
     return jsonify(session)
 
 

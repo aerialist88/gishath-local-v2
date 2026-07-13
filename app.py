@@ -131,6 +131,8 @@ SEARCH_BUDGET_SECONDS: float = 60.0
 # engine's plain HTTP client, curl, and even curl_cffi's Chrome-TLS
 # impersonation alike — only a real/headless browser can solve it. See
 # playwright_scraper.py's BINDERPOS_STORES (variant 4).
+TCG_MARKETPLACE = "The TCG Marketplace"
+
 ENGINE_STORES = [
     "Cards & Collections",
     "Dueller's Point",
@@ -139,8 +141,15 @@ ENGINE_STORES = [
     # Flagship Games and One MTG are handled by the Playwright/curl_cffi path
     # (playwright_scraper.py) — Go engine's BinderPOS API requires a residential
     # proxy (DYNAMIC_PROXY) which is not configured in the local setup.
-    "The TCG Marketplace",
+    TCG_MARKETPLACE,
 ]
+
+# TCG Marketplace orders cost SGD 0.40 per card to deliver to the preferred
+# pickup location, so its listings are re-priced to landed cost (listing +
+# fee) at merge time. Downstream consumers — result ranking, the shopping-plan
+# optimizer, price history, watchlist alerts, Excel export — all read the
+# merged price, so store comparisons reflect what a card actually costs.
+TCG_MARKETPLACE_DELIVERY_FEE_SGD = 0.40
 
 
 def _spawn_engine() -> subprocess.Popen:
@@ -299,6 +308,30 @@ signal.signal(signal.SIGTERM, _handle_signal)
 
 # ── Search helpers ────────────────────────────────────────────────────────────
 
+def _apply_delivery_fee(cards: list[dict]) -> list[dict]:
+    """Re-price TCG Marketplace listings to landed cost (listing + delivery fee).
+
+    Mutates and returns the same list. The fee is per card bought, so it is
+    baked into each listing's price rather than tracked as an order-level
+    charge; the extraInfo note keeps the surcharge visible in the UI and the
+    Excel export next to the raw listing price shown on the store site.
+    """
+    note = f"incl. SGD {TCG_MARKETPLACE_DELIVERY_FEE_SGD:.2f} delivery"
+    for card in cards:
+        if card.get("src") != TCG_MARKETPLACE:
+            continue
+        try:
+            base = float(card.get("price", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if base <= 0:
+            continue
+        card["price"] = round(base + TCG_MARKETPLACE_DELIVERY_FEE_SGD, 2)
+        extra = card.get("extraInfo", "")
+        card["extraInfo"] = f"{extra} · {note}" if extra else note
+    return cards
+
+
 def _merge_results(
     engine_results: dict[str, dict],
     playwright_results: dict[str, dict],
@@ -310,7 +343,7 @@ def _merge_results(
         eng = engine_results.get(card_name, {"cards": [], "errors": []})
         pw  = playwright_results.get(card_name, {"cards": [], "errors": []})
         merged[card_name] = {
-            "cards":  eng["cards"] + pw["cards"],
+            "cards":  _apply_delivery_fee(eng["cards"] + pw["cards"]),
             "errors": eng["errors"] + pw["errors"],
         }
     return merged
@@ -539,6 +572,11 @@ def collection_items():
 @app.route("/api/collection/status")
 def collection_status():
     return jsonify(collection.status())
+
+
+@app.route("/api/collection/value")
+def collection_value():
+    return jsonify(collection.value_summary())
 
 
 @app.route("/api/collection/export")

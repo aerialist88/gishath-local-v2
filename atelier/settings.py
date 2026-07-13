@@ -18,8 +18,15 @@ import json
 from deck_engine import config
 
 _TIER_STAGES = ["select", "draft", "judge", "validate_repair", "optimize", "card_tagger", "simulate"]
-_VALID_TIERS = ("haiku", "sonnet", "opus")
+_VALID_TIERS = ("haiku", "sonnet", "opus", "fable")
 _VALID_BRACKETS = ("1", "2", "3", "3-4", "4", "5")
+
+
+def _effective_thinking(stage: str) -> int:
+    """The budget the next call at this stage would actually use — same
+    stage > model > global resolution as claude_cli.run()."""
+    from deck_engine.claude_cli import _resolve_thinking_budget
+    return _resolve_thinking_budget(stage, config.MODEL_TIERS.get(stage, ""))
 
 
 def _read_file() -> dict:
@@ -41,6 +48,8 @@ def current() -> dict:
         "dedupe_commander_days": config.DEDUPE_COMMANDER_DAYS,
         "resume_session_chaining": config.RESUME_SESSION_CHAINING,
         "model_tiers": {k: config.MODEL_TIERS.get(k, "sonnet") for k in _TIER_STAGES},
+        "thinking_by_stage": {k: _effective_thinking(k) for k in _TIER_STAGES},
+        "thinking_default_tokens": int(config.THINKING_BUDGET_TOKENS or 6000),
         "email_to": config.EMAIL_TO,
         "newsletter_bcc": list(config.NEWSLETTER_BCC),
         # UI-only fields (stored, displayed, not engine-applied):
@@ -89,6 +98,22 @@ def save(updates: dict) -> dict:
                 raise ValueError(f"model tier for {stage} must be one of {', '.join(_VALID_TIERS)}")
             tiers[stage] = tier
         stored["model_tiers"] = tiers
+
+    if "thinking_by_stage" in updates and isinstance(updates["thinking_by_stage"], dict):
+        thinking = dict(stored.get("thinking_by_stage") or {})
+        for stage, tokens in updates["thinking_by_stage"].items():
+            if stage not in _TIER_STAGES:
+                continue
+            if isinstance(tokens, bool):  # UI toggle: on = the global default budget
+                tokens = int(config.THINKING_BUDGET_TOKENS or 6000) if tokens else 0
+            try:
+                tokens = int(tokens)
+            except (TypeError, ValueError):
+                raise ValueError(f"thinking budget for {stage} must be a number of tokens (0 = off)") from None
+            if not (0 <= tokens <= 32000):
+                raise ValueError(f"thinking budget for {stage} must be between 0 and 32000 tokens")
+            thinking[stage] = tokens
+        stored["thinking_by_stage"] = thinking
 
     if "email_to" in updates:
         email = str(updates["email_to"]).strip()
