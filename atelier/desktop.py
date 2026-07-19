@@ -45,7 +45,7 @@ def main() -> None:
                          f"port {server.PORT} — check for another process on that port.")
 
     webview.create_window(
-        "The Deckwright's Atelier",
+        "The Foundry",
         f"http://127.0.0.1:{server.PORT}",
         width=1360, height=900, min_size=(920, 640),
     )

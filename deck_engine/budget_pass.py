@@ -51,6 +51,7 @@ BUDGET_SWAP_JSON_SCHEMA = {
             "type": "array",
             "description": "One entry per over-cap card. remove = the exact over-cap card name; "
                            "add = the budget replacement (exact printed name).",
+            "maxItems": 15,  # grammar bound — see agent_pipeline swap caps (2026-07-17)
             "items": {
                 "type": "object",
                 "properties": {

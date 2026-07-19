@@ -57,8 +57,16 @@ async def search_one(
 async def search_many(
     card_names: list[str],
     stores: list[str] | None = None,
+    on_card=None,
 ) -> dict[str, dict]:
     """Search for multiple card names concurrently via asyncio.gather.
+
+    If on_card is provided, it is called as each card's engine search finishes:
+    on_card(card_name, cards, errors). It runs on this coroutine's event-loop
+    thread, so callers polling from another thread must synchronise inside the
+    callback (app.py's progressive /search jobs pass a lock-taking closure).
+    Callback failures are swallowed — progress reporting must never break the
+    search itself.
 
     Returns:
         {card_name: {"cards": [...], "errors": [...]}}
@@ -68,8 +76,17 @@ async def search_many(
     if not names:
         return {}
 
+    async def _one(client: httpx.AsyncClient, name: str) -> tuple[list, list]:
+        cards, errors = await search_one(client, name, stores)
+        if on_card is not None:
+            try:
+                on_card(name, cards, errors)
+            except Exception:
+                pass
+        return cards, errors
+
     async with httpx.AsyncClient() as client:
-        tasks = [search_one(client, name, stores) for name in names]
+        tasks = [_one(client, name) for name in names]
         gathered: list[tuple[list, list]] = await asyncio.gather(*tasks)
 
     return {

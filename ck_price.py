@@ -63,6 +63,7 @@ import calendar
 import json
 import logging
 import os
+import shutil
 import tempfile
 import threading
 import time
@@ -72,6 +73,23 @@ log = logging.getLogger(__name__)
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_DIR = os.path.join(_BASE_DIR, "state")
 CACHE_PATH = os.path.join(STATE_DIR, "ck_prices.json")
+
+# The iPhone app bundles CK prices at build time, and its nightly re-sign job
+# (launchd) cannot read this Desktop project folder (TCC). Publish a copy
+# where it can — only if the directory already exists (i.e. the iOS toolchain
+# has been set up on this Mac); otherwise this is a silent no-op.
+IOS_SIDE_COPY_PATH = os.path.expanduser(
+    "~/Library/Application Support/ThreevorFetch/ck_prices.json")
+
+
+def _publish_ios_side_copy() -> None:
+    try:
+        if os.path.isdir(os.path.dirname(IOS_SIDE_COPY_PATH)):
+            shutil.copyfile(CACHE_PATH, IOS_SIDE_COPY_PATH)
+            log.info("ck price refresh: published iOS side copy to %s", IOS_SIDE_COPY_PATH)
+    except Exception:
+        # A failed side copy must never fail the real refresh.
+        log.exception("ck_price: failed to publish iOS side copy")
 
 ALL_PRICES_TODAY_URL = "https://mtgjson.com/api/v5/AllPricesToday.json.bz2"
 ALL_PRINTINGS_URL = "https://mtgjson.com/api/v5/AllPrintings.json.bz2"
@@ -381,6 +399,7 @@ def _write_cache(cheapest: dict[str, dict], price_date: str) -> str:
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(payload, f)
     os.replace(tmp_path, CACHE_PATH)  # atomic — a crash mid-write never corrupts the live cache
+    _publish_ios_side_copy()
     return synced_at
 
 

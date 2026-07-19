@@ -1,18 +1,21 @@
 #!/bin/bash
-# Double-click launcher for The Deckwright's Atelier — browser version.
+# Double-click launcher for The Foundry — browser version.
 # Starts the local server (if it isn't already running) and opens it in
 # Chrome. The server is detached (nohup) so it keeps running even if you
 # close this Terminal window or the browser tab — an in-progress commission
 # survives either one closing.
 
-PROJECT_DIR="/Users/trevorjow/Desktop/Cowork Playground/Local Gishath Fetch/gishath-local-v2"
-PORT=5077
+PROJECT_DIR="/Users/trevorjow/Desktop/Cowork Playground/Local Gishath Fetch/gishath-local-lmstudio"
+# 5078 is the LOCAL fork (The Foundry) — 5077 is the original cloud Atelier.
+# Exported so atelier/server.py binds the same port we health-check here.
+PORT="${ATELIER_PORT:-5078}"
+export ATELIER_PORT="$PORT"
 URL="http://127.0.0.1:$PORT"
 LOG_FILE="$PROJECT_DIR/logs/atelier_server.log"
 PID_FILE="$PROJECT_DIR/logs/atelier_server.pid"
 
 cd "$PROJECT_DIR" || {
-  echo "Could not find the gishath-local-v2 project folder."
+  echo "Could not find the gishath-local-lmstudio project folder."
   read -p "Press Return to close this window..."
   exit 1
 }
@@ -22,9 +25,9 @@ is_up() {
 }
 
 if is_up; then
-  echo "The Atelier is already running at $URL"
+  echo "The Foundry is already running at $URL"
 else
-  echo "Starting The Deckwright's Atelier server..."
+  echo "Starting The Foundry server..."
   mkdir -p logs
   source venv/bin/activate
   nohup python -m atelier.server > "$LOG_FILE" 2>&1 &

@@ -162,17 +162,18 @@ _browser = None          # playwright Browser object
 _playwright_ctx = None   # playwright Playwright context manager result
 _loop: Optional[asyncio.AbstractEventLoop] = None
 _loop_thread: Optional[threading.Thread] = None
-_MAX_CONCURRENT_PAGES = 10
+_MAX_CONCURRENT_PAGES = 20
 _semaphore: Optional[asyncio.Semaphore] = None
 
 # Agora Hobby's search endpoint is real (not Cloudflare-blocked) but slow and
 # highly variable — repeated probes of the identical query ranged 7s to nearly
-# 30s. It shares PAGE_TIMEOUT/GOTO_ATTEMPTS with every other store, so a slow
-# request can hold a page slot for up to ~40s (2 goto attempts). Routing it
-# through the same _semaphore as the other 9 (fast, 2-5s) stores let it
-# monopolize shared browser-page slots and was a major contributor to
-# search_many_playwright blowing app.py's SEARCH_BUDGET_SECONDS. Giving it its
-# own small semaphore means its slowness can only cannibalize its own budget.
+# 30s. A slow request can hold a page slot for the full goto budget (timeout ×
+# GOTO_ATTEMPTS). Routing it through the same _semaphore as the other 9 (fast,
+# 2-5s) stores let it monopolize shared browser-page slots and was a major
+# contributor to search_many_playwright blowing app.py's
+# SEARCH_BUDGET_SECONDS. Giving it its own small semaphore means its slowness
+# can only cannibalize its own budget (which also lets it run with a longer
+# goto timeout — see AGORA_PAGE_TIMEOUT below).
 AGORA_STORE_NAME = "Agora Hobby"
 _AGORA_MAX_CONCURRENT_PAGES = 2
 _agora_semaphore: Optional[asyncio.Semaphore] = None
@@ -180,6 +181,13 @@ _agora_semaphore: Optional[asyncio.Semaphore] = None
 _browser_lock: Optional[asyncio.Lock] = None  # guards relaunch — created lazily on the playwright loop
 
 PAGE_TIMEOUT = 20_000   # ms — per-page navigation timeout
+
+# Agora's slow tail (7-30s probes, see above) regularly blows the shared 20s
+# goto timeout on bad evenings (2026-07-15: every goto timed out, tripping the
+# breaker while curl fetched the same URLs fine in ~6s). Since Agora is fenced
+# off behind its own 2-page semaphore, a longer timeout only spends Agora's own
+# budget; app.py's SEARCH_BUDGET_SECONDS still caps the overall request.
+AGORA_PAGE_TIMEOUT = 40_000   # ms — Agora Hobby per-page navigation timeout
 WAIT_SELECTOR_TIMEOUT = 5_000  # ms — wait for results selector (shorter = faster failure on no-results pages)
 GOTO_ATTEMPTS = 2       # total attempts (1 retry) for page.goto on transient timeouts
 
@@ -861,6 +869,7 @@ async def _scrape_with_playwright(store: StoreConfig, card_name: str) -> list[di
     await _ensure_browser_healthy()
 
     url = store.search_url(card_name)
+    goto_timeout = AGORA_PAGE_TIMEOUT if store.name == AGORA_STORE_NAME else PAGE_TIMEOUT
     js  = {1: _JS_VARIANT1, 2: _JS_VARIANT2, 3: _JS_VARIANT3, 4: _JS_VARIANT4}[store.variant]
     wait_sel = {
         1: "div.Norm",
@@ -879,7 +888,7 @@ async def _scrape_with_playwright(store: StoreConfig, card_name: str) -> list[di
                     lambda route: route.abort(),
                 )
                 try:
-                    await page.goto(url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+                    await page.goto(url, timeout=goto_timeout, wait_until="domcontentloaded")
                     _breaker_record_success(store)
                 except PlaywrightTimeoutError as exc:
                     if attempt < GOTO_ATTEMPTS:

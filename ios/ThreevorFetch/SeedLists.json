@@ -1,0 +1,120 @@
+{
+ "random": {
+  "cards": [
+   "Ancient Copper Dragon",
+   "Ancient Silver Dragon",
+   "Dinosaurs on a Spaceship"
+  ],
+  "updated": "2026-07-08 12:42"
+ },
+ "Iron man buy list": {
+  "cards": [
+   "Myr Retriever",
+   "Scrap Trawler",
+   "Wurmcoil Engine",
+   "Karn, Legacy Reforged",
+   "Preordain",
+   "Delete",
+   "Ponder",
+   "Scrap Mastery",
+   "Slip Out the Back",
+   "Spine of Ish Sah",
+   "Prized Statue",
+   "Ugin's Nexus",
+   "Esoteric Duplicator",
+   "Sculpting Steel",
+   "Nexus of Becoming",
+   "Crystal Skull, Isu Spyglass",
+   "Mystic Forge",
+   "Machine God's Effigy",
+   "Imposter Mech",
+   "Darksteel Monolith",
+   "Portal to Phyrexia",
+   "Storm the Vault // Vault of Catlacan",
+   "Academy Ruins",
+   "Inventors' Fair",
+   "Minamo, School at Water's Edge"
+  ],
+  "updated": "2026-07-09 11:41"
+ },
+ "Captain Amerigay": {
+  "cards": [
+   "Aphetto Alchemist",
+   "Apprentice Wizard",
+   "Arcade Gannon",
+   "Arcum Dagsson",
+   "Brigid, Hero of Kinsbaile",
+   "Encumbered Reejerey",
+   "Ioreth of the Healing House",
+   "Mistmeadow Vanisher",
+   "Palladium Myr",
+   "Pestered Wellguard",
+   "Sanwell, Avenger Ace",
+   "Scaretiller",
+   "Stonybrook Schoolmaster",
+   "Vedalken Engineer"
+  ],
+  "updated": "2026-07-12 05:43"
+ },
+ "Fetch Lands": {
+  "cards": [
+   "Arid Mesa",
+   "Bloodstained Mire",
+   "Flooded Strand",
+   "Marsh Flats",
+   "Misty Rainforest",
+   "Polluted Delta",
+   "Prismatic Vista",
+   "Scalding Tarn",
+   "Verdant Catacombs",
+   "Windswept Heath",
+   "Wooded Foothills"
+  ],
+  "updated": "2026-07-13 14:51"
+ },
+ "Shock Lands": {
+  "cards": [
+   "Blood Crypt",
+   "Breeding Pool",
+   "Godless Shrine",
+   "Hallowed Fountain",
+   "Overgrown Tomb",
+   "Sacred Foundry",
+   "Steam Vents",
+   "Stomping Ground",
+   "Temple Garden",
+   "Watery Grave"
+  ],
+  "updated": "2026-07-13 14:55"
+ },
+ "Battlebond Lands": {
+  "cards": [
+   "Bountiful Promenade",
+   "Luxury Suite",
+   "Morphic Pool",
+   "Rejuvenating Springs",
+   "Sea of Clouds",
+   "Spectator Seating",
+   "Spire Garden",
+   "Training Center",
+   "Undergrowth Stadium",
+   "Vault of Champions"
+  ],
+  "updated": "2026-07-13 14:56"
+ },
+ "Surveil Lands": {
+  "cards": [
+   "Commercial District",
+   "Elegant Parlor",
+   "Hedge Maze",
+   "Lush Portico",
+   "Meticulous Archive",
+   "Raucous Theater",
+   "Shadowy Backstreet",
+   "Thundering Falls",
+   "Undercity Sewers",
+   "Underground Mortuary"
+  ],
+  "updated": "2026-07-13 14:58"
+ }
+}

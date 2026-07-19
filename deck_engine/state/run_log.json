@@ -454,5 +454,227 @@
       "B"
     ],
     "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-14T13:14:40.663009+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[draft/judge/validate/optimize] Deck failed validation after the draft-repair loop and could not be recovered:\n- Outside Bre of Clan Stoutarm's color identity: Rugged Highlands"
+  },
+  {
+    "timestamp": "2026-07-14T13:35:41.115358+00:00",
+    "commander": "Bre of Clan Stoutarm",
+    "archetype": "Boros Giant Life-Spike: doubled lifelink swing into Bre free-cast",
+    "status": "success",
+    "colors": [
+      "R",
+      "W"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-14T14:25:02.995178+00:00",
+    "commander": "Shang-Chi, Master of Kung Fu",
+    "archetype": "Mono-green Shang-Chi \"instant-speed creature toolbox\" \u2014 uses the commander's haste-for-activated-abilities static to fire {T}-cost dorks, fight/sac removal, tutors and mana cheats the turn they land, plus a bounce/rebuy loop to re-fire one-shot tap effects",
+    "status": "success",
+    "colors": [
+      "G"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-14T14:38:32.102668+00:00",
+    "commander": "Phelddagrif",
+    "archetype": "Bant \"weaponized generosity\" political control \u2014 force-feed opponents Hippos, life, and draws, then tax and harvest what they were made to take",
+    "status": "success",
+    "colors": [
+      "G",
+      "U",
+      "W"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-14T14:51:06.111532+00:00",
+    "commander": "Pia Nalaar, Chief Mechanic",
+    "archetype": "Temur (G/R/U) energy-token engine \u2014 bank energy off artifact-creature combat damage, mint doubled Nalaar Aetherjets each end step",
+    "status": "success",
+    "colors": [
+      "G",
+      "R",
+      "U"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-15T05:54:24.992619+00:00",
+    "commander": "Zaxara, the Exemplary",
+    "archetype": "Sultai Zaxara X-spell Hydra swarm \u2014 recur-and-recast engine into a wide counter-boosted Hydra board",
+    "status": "success",
+    "colors": [
+      "B",
+      "G",
+      "U"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-16T01:19:12.064867+00:00",
+    "commander": "The Council of Four",
+    "archetype": "Azorius Council of Four \"second helping\" symmetric value engine \u2014 table-wide extra draws plus a double-spell-per-turn cadence trigger the commander's second-draw and second-spell clauses, multiplying minted Knights into a go-wide token swarm.",
+    "status": "success",
+    "colors": [
+      "U",
+      "W"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-17T05:22:00.675201+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[select] [select/1] local model reply is not valid JSON: "
+  },
+  {
+    "timestamp": "2026-07-17T05:23:01.674161+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[select] [select/1] local model reply is not valid JSON: "
+  },
+  {
+    "timestamp": "2026-07-17T05:23:30.951739+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[select] [select/1] local model reply is not valid JSON: "
+  },
+  {
+    "timestamp": "2026-07-17T05:24:08.231433+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[select] [select/1] local model reply is not valid JSON: "
+  },
+  {
+    "timestamp": "2026-07-17T05:47:20.854933+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[draft/judge/validate/optimize] Deck failed validation after the draft-repair loop and could not be recovered:\n- Only 0 ramp sources (mana rocks/dorks, land-ramp spells, extra land drops) \u2014 far too few to cast the commander and the deck's top end on time. Swap the weakest non-ramp, nonland cards for efficient ramp in the commander's colors (e.g. Signets/Talismans, two-mana land-ramp sorceries) until the deck has at least 10 ramp sources. Do NOT cut lands to make room."
+  },
+  {
+    "timestamp": "2026-07-17T05:54:26.338686+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[draft/judge/validate/optimize] Deck failed validation after the draft-repair loop and could not be recovered:\n- Deck has 114 cards, expected 100 (commander + 99)."
+  },
+  {
+    "timestamp": "2026-07-17T06:07:58.990771+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[draft/judge/validate/optimize] Deck failed validation after the draft-repair loop and could not be recovered:\n- Only 3 lands \u2014 the mana base has been damaged. Add basic lands in the commander's colors (cutting the weakest nonland cards) until the deck has at least 35 lands."
+  },
+  {
+    "timestamp": "2026-07-17T06:13:27.071631+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[draft/judge/validate/optimize] Deck failed validation after the draft-repair loop and could not be recovered:\n- Not found on Scryfall (likely hallucinated \u2014 replace with a real card): Elvish Mystic (copy)"
+  },
+  {
+    "timestamp": "2026-07-17T06:38:09.313832+00:00",
+    "commander": "Korvold, Fae-Cursed King",
+    "archetype": "Sacrifice Outlets + Value Engine",
+    "status": "success",
+    "colors": [
+      "B",
+      "G",
+      "R"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-17T06:57:31.182381+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[select] [select/1] cannot reach local LLM server at http://127.0.0.1:1234/v1/chat/completions \u2014 is LM Studio running with its server started (and a model loaded)? underlying error: <urlopen error [Errno 61] Connection refused>"
+  },
+  {
+    "timestamp": "2026-07-17T07:04:17.674710+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[draft/judge/validate/optimize] Deck failed validation after the draft-repair loop and could not be recovered:\n- Not found on Scryfall (likely hallucinated \u2014 replace with a real card): Hailstorm Predator, Hunters' Edge"
+  },
+  {
+    "timestamp": "2026-07-17T07:12:17.160309+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[draft/judge/validate/optimize] Deck failed validation after the draft-repair loop and could not be recovered:\n- Deck has 105 cards, expected 100 (commander + 99)."
+  },
+  {
+    "timestamp": "2026-07-17T07:20:59.376597+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[draft/judge/validate/optimize] [synergy/attempt1/synergy-repair-1] repetition loop detected in the model's output stream \u2014 aborted early after ~1933 looping chars (sample: ' is the commander and enables the specific mechanic of turning lands into creatu')"
+  },
+  {
+    "timestamp": "2026-07-17T07:33:05.155820+00:00",
+    "commander": "Tatyova, Steward of Tides",
+    "archetype": "Landfall Elemental Swarm",
+    "status": "success",
+    "colors": [
+      "G",
+      "U"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-17T07:50:45.115746+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[draft/judge/validate/optimize] Deck failed validation after the draft-repair loop and could not be recovered:\n- Only 0 board wipe(s) \u2014 indefensible in multiplayer Commander. Swap the weakest nonland, non-ramp cards for mass removal in the commander's colors until the deck has at least 2 wipes. Do NOT cut lands or ramp."
+  },
+  {
+    "timestamp": "2026-07-17T08:00:15.709821+00:00",
+    "commander": "Tatyova, Steward of Tides",
+    "archetype": "Landfall Land-Creature Aggro (Land-Beatdown / Manland Skies)",
+    "status": "success",
+    "colors": [
+      "G",
+      "U"
+    ],
+    "error_summary": ""
+  },
+  {
+    "timestamp": "2026-07-18T00:34:59.715598+00:00",
+    "commander": "",
+    "archetype": "",
+    "status": "error",
+    "colors": [],
+    "error_summary": "[select] [select/1] cannot reach local LLM server at http://127.0.0.1:1234/v1/chat/completions \u2014 is LM Studio running with its server started (and a model loaded)? underlying error: <urlopen error [Errno 61] Connection refused>"
   }
 ]

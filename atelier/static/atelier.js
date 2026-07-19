@@ -1205,7 +1205,7 @@ function breakdownTab(deck) {
       <thead><tr><th>Card</th><th>SG Price</th><th>Store</th><th>CK Ref (US)</th><th>Role</th><th>Phase</th><th>CMC</th><th>Type</th><th>Rarity</th></tr></thead>
       <tbody>${(deck.cards || []).map((c) => `<tr>
         <td class="card-name" data-card="${esc(c.name)}"${c.is_commander ? ' style="font-weight:700"' : ""}>${esc(c.name)}</td>
-        <td class="mono ${c.over_cap ? "flag" : ""}" style="${c.over_cap ? "color:var(--rust)" : "color:#065f46"}">${c.price_sgd != null ? "SGD " + c.price_sgd.toFixed(2) + (c.over_cap ? " ⚑" : "") : "unavailable"}</td>
+        <td class="mono ${c.over_cap ? "flag" : ""}" style="${c.over_cap ? "color:var(--rust)" : "color:#74a860"}">${c.price_sgd != null ? "SGD " + c.price_sgd.toFixed(2) + (c.over_cap ? " ⚑" : "") : "unavailable"}</td>
         <td class="mono">${esc(c.store || "—")}</td>
         <td class="mono" style="color:var(--brass-dark)">${c.ck_price_usd != null ? (c.ck_url ? `<a href="${esc(c.ck_url)}" target="_blank" rel="noopener" style="color:inherit">USD ${c.ck_price_usd.toFixed(2)}</a>` : `USD ${c.ck_price_usd.toFixed(2)}`) : "—"}</td>
         <td>${esc(c.role)}</td><td>${esc(c.phase)}</td>
@@ -1665,8 +1665,9 @@ async function viewRules() {
         <div class="rule-panel-body" style="gap:0">
           ${stages.map(([key, label, note]) => `<div class="workforce-row">
             <span class="stage">${label}</span><span class="note">${note}</span>
-            <div style="display:flex;gap:4px">${["haiku", "sonnet", "opus", "fable"].map((tier) =>
-              `<button class="tier-chip ${s.model_tiers[key] === tier ? "active" : ""}" data-stage="${key}" data-tier="${tier}">${tier}</button>`).join("")}<button
+            <div style="display:flex;gap:4px">${["haiku", "sonnet", "opus", "fable", "local"].map((tier) =>
+              `<button class="tier-chip ${(tier === "local" ? String(s.model_tiers[key]).startsWith("local") : s.model_tiers[key] === tier) ? "active" : ""}" data-stage="${key}" data-tier="${tier}"${
+                tier === "local" ? ' title="LM Studio on this Mac — needs its server running with a model loaded"' : ""}>${tier}</button>`).join("")}<button
               class="tier-chip think-chip ${s.thinking_by_stage[key] > 0 ? "active" : ""}" data-think-stage="${key}"
               title="extended thinking (~${(s.thinking_default_tokens || 6000).toLocaleString()} tokens — bills as output tokens)">think</button></div>
           </div>`).join("")}

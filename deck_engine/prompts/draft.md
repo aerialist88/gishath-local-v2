@@ -69,7 +69,10 @@ $edhrec_pool_block
 
 Respond only via the provided JSON schema: your angle's name, a short gameplan summary, the 5-10
 key_cards your gameplan actually depends on (exact printed names — the judge gets their real
-oracle text as ground truth), and the flat list of exactly $deck_size_minus_1 card name strings.
+oracle text as ground truth), then the decklist in TWO parts: `lands` — exactly 36 lands, each
+listed individually (basics repeat: writing 'Mountain' six times is six Mountains; nonbasic
+lands are singletons) — and `nonlands` — exactly 63 distinct nonland cards. Together they are
+your $deck_size_minus_1; budget the 36 land slots as part of your manabase thinking.
 Before calling the structured-output tool, narrate your reasoning out loud — this streams live to
 whoever is watching the commission, alongside the other drafters working in parallel, so make it
 genuinely worth reading: the angle you're committing to, how you're shaping the manabase and

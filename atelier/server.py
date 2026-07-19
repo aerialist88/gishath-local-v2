@@ -21,7 +21,7 @@ from . import archive, art, commanders, forge_engine, own_decks, rules_reference
 from .runner import MANAGER, RUNS_DIR
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-PORT = int(os.environ.get("ATELIER_PORT", 5077))
+PORT = int(os.environ.get("ATELIER_PORT", 5078))  # 5078: the LOCAL fork — 5077 is the original cloud Atelier
 
 app = Flask(__name__, static_folder=None)
 

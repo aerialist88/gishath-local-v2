@@ -18,7 +18,9 @@ import json
 from deck_engine import config
 
 _TIER_STAGES = ["select", "draft", "judge", "validate_repair", "optimize", "card_tagger", "simulate"]
-_VALID_TIERS = ("haiku", "sonnet", "opus", "fable")
+# "local" = the LM Studio backend (deck_engine/local_llm.py); "local:<model-id>"
+# variants are accepted too so a stage can pin a specific loaded model.
+_VALID_TIERS = ("haiku", "sonnet", "opus", "fable", "local")
 _VALID_BRACKETS = ("1", "2", "3", "3-4", "4", "5")
 
 
@@ -94,7 +96,7 @@ def save(updates: dict) -> dict:
         for stage, tier in updates["model_tiers"].items():
             if stage not in _TIER_STAGES:
                 continue
-            if tier not in _VALID_TIERS:
+            if tier not in _VALID_TIERS and not (isinstance(tier, str) and tier.startswith("local:")):
                 raise ValueError(f"model tier for {stage} must be one of {', '.join(_VALID_TIERS)}")
             tiers[stage] = tier
         stored["model_tiers"] = tiers
@@ -140,4 +142,8 @@ def save(updates: dict) -> dict:
 
     config.UI_SETTINGS_PATH.write_text(json.dumps(stored, indent=1))
     config._apply_ui_settings()  # noqa: SLF001 — same module, deliberate re-apply for the live process
+    # Re-assert DECK_ENGINE_LOCAL_MODE after the UI overlay, exactly like
+    # import time does — without this, saving Guild rules while running in
+    # local mode would silently flip the tiers back to the file's cloud values.
+    config._apply_local_mode()  # noqa: SLF001
     return current()

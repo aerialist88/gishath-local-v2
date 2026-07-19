@@ -1,7 +1,7 @@
 # Gishath Fetch v2 — Makefile
 # Run all commands from the gishath-local-v2/ directory.
 
-.PHONY: engine-build run sync-engine clean install-playwright atelier atelier-web gallery gallery-preview gallery-deploy ck-refresh watchlist-check help
+.PHONY: engine-build run sync-engine clean install-playwright atelier atelier-web gallery gallery-preview gallery-deploy ck-refresh watchlist-check iphone help
 
 GO          = /usr/local/go/bin/go
 ENGINE_SRC  = engine-src/api
@@ -20,6 +20,7 @@ help:
 	@echo "  make sync-engine        Pull upstream fixes into the engine fork"
 	@echo "  make ck-refresh         Refresh the Card Kingdom reference-price cache (MTGJSON)"
 	@echo "  make watchlist-check    Run the price-watch alert check now (also runs nightly)"
+	@echo "  make iphone             Build the native iOS app + install to the iPhone (re-signs the 7-day cert)"
 	@echo "  make clean              Remove the built engine binary"
 	@echo ""
 
@@ -56,6 +57,14 @@ ck-refresh:
 
 watchlist-check:
 	. venv/bin/activate && python check_watchlist.py
+
+# Also refreshes the launchd mirror (launchd can't read ~/Desktop — TCC),
+# so the nightly cert-renewal job always builds the code you last deployed.
+IOS_MIRROR = $(HOME)/Library/Application Support/ThreevorFetch/repo
+iphone:
+	mkdir -p "$(IOS_MIRROR)"
+	rsync -a --delete --exclude .DS_Store ios/ "$(IOS_MIRROR)/ios/"
+	./ios/deploy.sh
 
 sync-engine:
 	@echo "Fetching upstream changes..."

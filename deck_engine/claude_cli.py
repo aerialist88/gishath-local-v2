@@ -80,7 +80,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config, spend_log
+from . import config, local_llm, spend_log
 
 _active_view = None  # set via set_live_view() by deck_engine/run.py; None means "no view, behave as before"
 
@@ -328,6 +328,17 @@ def run(
                 f">= ${cap:.2f} cap — halting before this call"
             )
 
+    # Local backend (LM Studio et al.) — tier value "local" or "local:<model-id>"
+    # routes to local_llm.stream_chat instead of spawning `claude -p`. Dispatch
+    # happens AFTER the cancel + crucible checks above so those behave
+    # identically for both backends. disallowed_tools/resume_session_id are
+    # meaningless locally (no tools, no sessions) and deliberately ignored.
+    if model == "local" or model.startswith("local:"):
+        return _run_local(
+            prompt, run_id=run_id, stage=stage, tier_value=model,
+            json_schema=json_schema, timeout_s=timeout_s,
+        )
+
     cmd = [
         config.CLAUDE_BIN, "-p", prompt,
         "--output-format", "stream-json",
@@ -484,5 +495,105 @@ def run(
 
     if result.is_error:
         raise ClaudeCLIError(f"[{stage}] claude -p returned is_error=true: {result.text[:500]}")
+
+    return result
+
+
+def _run_local(
+    prompt: str,
+    *,
+    run_id: str,
+    stage: str,
+    tier_value: str,
+    json_schema: dict | None,
+    timeout_s: float,
+) -> ClaudeResult:
+    """The local-backend twin of the `claude -p` path below run()'s dispatch:
+    same live-view feed, same spend_log record shape (cost 0 — quality-per-token
+    analysis over the log must keep working when a stage goes local), same
+    ClaudeCLIError on any failure so every caller's error handling is unchanged.
+
+    Timeouts: call sites pass claude-sized budgets (900s default); a local
+    draft on Air-class hardware can legitimately need longer than that between
+    prefill and a 20k-token generation, so the effective budget is the LARGER
+    of the caller's and config.LOCAL_LLM_TIMEOUT_S.
+    """
+    model_id = local_llm.resolve_model_id(tier_value)
+    display_model = f"local:{model_id}" if model_id else "local"
+    handle = _active_view.start_call(stage, display_model) if _active_view is not None else None
+
+    stats = {"narration_chars": 0, "thinking_chars": 0}
+
+    def _on_text(chunk: str) -> None:
+        stats["narration_chars"] += len(chunk)
+        if handle is not None:
+            handle.append_text(chunk)
+
+    def _on_thinking(chunk: str) -> None:
+        if stats["thinking_chars"] == 0 and handle is not None:
+            handle.set_status("thinking it through...")
+        stats["thinking_chars"] += len(chunk)
+        if handle is not None:
+            handle.append_thinking(chunk)
+
+    effective_timeout = max(float(timeout_s), float(getattr(config, "LOCAL_LLM_TIMEOUT_S", 0) or 0))
+
+    try:
+        reply = local_llm.stream_chat(
+            prompt,
+            model_id=model_id,
+            json_schema=json_schema,
+            timeout_s=effective_timeout,
+            on_text=_on_text,
+            on_thinking=_on_thinking,
+        )
+    except local_llm.LocalLLMError as exc:
+        if handle is not None:
+            handle.finish(cost_usd=0.0, num_turns=0, duration_s=0.0, is_error=True)
+        raise ClaudeCLIError(f"[{stage}] {exc}") from exc
+
+    envelope = {
+        "type": "result",
+        "result": reply["text"],
+        "structured_output": reply["structured"],
+        "is_error": False,
+        "num_turns": 1,
+        "total_cost_usd": 0.0,
+        "duration_ms": reply["duration_ms"],
+        "session_id": "",  # no sessions locally — also keeps --resume experiments cloud-only
+        "usage": reply["usage"],
+        "backend": "local",
+    }
+    result = ClaudeResult(
+        text=reply["text"],
+        is_error=False,
+        num_turns=1,
+        cost_usd=0.0,
+        duration_ms=reply["duration_ms"],
+        session_id="",
+        raw=envelope,
+        usage=reply["usage"],
+        tools_used=[],
+    )
+
+    if handle is not None:
+        handle.finish(cost_usd=0.0, num_turns=1,
+                       duration_s=reply["duration_ms"] / 1000, is_error=False)
+
+    if config.LOG_SPEND_PER_RUN:
+        spend_log.record(
+            run_id=run_id, stage=stage, model=display_model, cost_usd=0.0,
+            num_turns=1, duration_ms=reply["duration_ms"],
+            is_error=False, session_id="",
+            input_tokens=int(reply["usage"].get("input_tokens", 0) or 0),
+            output_tokens=int(reply["usage"].get("output_tokens", 0) or 0),
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+            tools_used=[],
+            narration_chars=stats["narration_chars"],
+            thinking_chars=stats["thinking_chars"],
+            thinking_est_tokens=0,
+            structured_chars=len(json.dumps(reply["structured"])) if reply["structured"] is not None else 0,
+        )
 
     return result

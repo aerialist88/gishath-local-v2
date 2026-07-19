@@ -120,9 +120,9 @@ DRAFT_SUBAGENTS: int = 3   # complete decks drafted in parallel before the judge
 # DRAFT_SUBAGENTS calls in parallel, so an Opus tier there multiplies.
 MODEL_TIERS: dict = {
     "select": os.environ.get("DECK_ENGINE_SELECT_MODEL", "sonnet"),
-    "draft": "sonnet",
+    "draft": os.environ.get("DECK_ENGINE_DRAFT_MODEL", "sonnet"),
     "judge": os.environ.get("DECK_ENGINE_JUDGE_MODEL", "opus"),
-    "validate_repair": "sonnet",
+    "validate_repair": os.environ.get("DECK_ENGINE_VALIDATE_REPAIR_MODEL", "sonnet"),
     "optimize": os.environ.get("DECK_ENGINE_OPTIMIZE_MODEL", "opus"),
     # PRD v4 amendment T4: card_tags/mechanic-token extraction moved OFF Opus
     # entirely — these are cheap classification tasks (xlsx presentation
@@ -247,6 +247,10 @@ THINKING_BUDGET_BY_MODEL: dict = {
     # global 6000, which would silently buy redacted thinking at the most
     # expensive tier's output prices.
     "fable": int(os.environ.get("DECK_ENGINE_THINKING_FABLE_TOKENS", "0")),
+    # local backend ignores MAX_THINKING_TOKENS entirely (the model's own
+    # reasoning mode governs); listed so the Atelier settings screen shows 0
+    # rather than the misleading global fallback.
+    "local": 0,
 }
 
 # Per-STAGE thinking budgets, keyed by model tier key — outranks the per-model
@@ -275,6 +279,77 @@ THINKING_BUDGET_BY_STAGE: dict = {
 # environment run_nightly.sh executes in (e.g. cron-like shells often have a
 # thinner PATH than an interactive terminal).
 CLAUDE_BIN: str = os.environ.get("DECK_ENGINE_CLAUDE_BIN", "claude")
+
+# ── Local LLM backend (LM Studio / any OpenAI-compatible server) ─────────────
+# A MODEL_TIERS value of "local" (or "local:<model-id>" to name a specific
+# loaded model) routes that stage to this server instead of `claude -p` — see
+# local_llm.py for backend semantics (no tools, grammar-enforced JSON).
+LOCAL_LLM_BASE_URL: str = os.environ.get(
+    "DECK_ENGINE_LOCAL_LLM_BASE_URL", "http://127.0.0.1:1234/v1"
+)
+# Model id sent to the server for bare "local" tiers. Empty = omit the field
+# and use whatever model LM Studio currently has loaded — the right default
+# for a one-model setup, and it means switching models in the LM Studio UI
+# needs no config change here.
+LOCAL_LLM_MODEL: str = os.environ.get("DECK_ENGINE_LOCAL_LLM_MODEL", "")
+# Local floor for per-call timeouts: call sites pass claude-sized budgets
+# (900s default) but an Air-class Mac can need longer for a big draft
+# (minutes of prefill + a long generation). claude_cli._run_local uses
+# max(caller's timeout, this).
+LOCAL_LLM_TIMEOUT_S: float = float(os.environ.get("DECK_ENGINE_LOCAL_LLM_TIMEOUT_S", "3600"))
+# Output cap per call (0 = let the server decide). The biggest legit local
+# output observed across runs 1-7 was optimize at 3.3k tokens (drafts ~1k), so
+# 8192 is 2x headroom — and it bounds a runaway repetition loop to ~4 minutes
+# of wall clock instead of the 15 that a 32k cap allowed (Ziatora loop,
+# 2026-07-17). A reply that hits this cap raises (truncated JSON is useless)
+# with a message naming this knob.
+LOCAL_LLM_MAX_OUTPUT_TOKENS: int = int(
+    os.environ.get("DECK_ENGINE_LOCAL_LLM_MAX_OUTPUT_TOKENS", "8192")
+)
+# Repetition control (first live Foundry run, 2026-07-17: a draft bench looped
+# the same six equipment cards for 10+ minutes inside its schema-constrained
+# array). Grammar masking means penalties can never corrupt the JSON structure
+# — they only discourage re-emitting the same content tokens, which is
+# precisely the loop failure. 0 disables.
+LOCAL_LLM_FREQUENCY_PENALTY: float = float(
+    os.environ.get("DECK_ENGINE_LOCAL_LLM_FREQUENCY_PENALTY", "0.7")
+)
+LOCAL_LLM_PRESENCE_PENALTY: float = float(
+    os.environ.get("DECK_ENGINE_LOCAL_LLM_PRESENCE_PENALTY", "0.5")
+)
+# Qwen's recommended sampling (temp 0.7 / top_p 0.8) sent explicitly rather
+# than trusting whatever the server preset happens to be — near-greedy
+# constrained decoding is exactly where the repeat-loops live.
+LOCAL_LLM_TEMPERATURE: float = float(os.environ.get("DECK_ENGINE_LOCAL_LLM_TEMPERATURE", "0.7"))
+LOCAL_LLM_TOP_P: float = float(os.environ.get("DECK_ENGINE_LOCAL_LLM_TOP_P", "0.8"))
+
+# DECK_ENGINE_LOCAL_MODE=1 flips every DECK-CONTENT stage to the local backend
+# in one move — the "run 3vor Fetch on my own hardware" switch. Deliberately
+# NOT simulate/coach_*: the Forge-match stack stays on cloud tiers (Trevor's
+# call, 2026-07-17). A stage whose own DECK_ENGINE_<STAGE>_MODEL env var is
+# set explicitly is left alone, so hybrid experiments (e.g. local everything
+# but judge on opus) are a one-liner:
+#   DECK_ENGINE_LOCAL_MODE=1 DECK_ENGINE_JUDGE_MODEL=opus ...
+_LOCAL_MODE_STAGES: tuple = ("select", "draft", "judge", "validate_repair", "optimize", "card_tagger")
+_STAGE_MODEL_ENV_VARS: dict = {
+    "select": "DECK_ENGINE_SELECT_MODEL",
+    "draft": "DECK_ENGINE_DRAFT_MODEL",
+    "judge": "DECK_ENGINE_JUDGE_MODEL",
+    "validate_repair": "DECK_ENGINE_VALIDATE_REPAIR_MODEL",
+    "optimize": "DECK_ENGINE_OPTIMIZE_MODEL",
+    "card_tagger": "DECK_ENGINE_CARD_TAGGER_MODEL",
+}
+
+
+def _apply_local_mode() -> None:
+    """Called at import time AFTER _apply_ui_settings() (env-shaped decisions
+    outrank the UI file, same precedence as everything else here)."""
+    if os.environ.get("DECK_ENGINE_LOCAL_MODE", "").strip().lower() not in ("1", "true", "yes"):
+        return
+    for stage in _LOCAL_MODE_STAGES:
+        if os.environ.get(_STAGE_MODEL_ENV_VARS[stage]):
+            continue  # explicit per-stage choice wins over the blanket switch
+        MODEL_TIERS[stage] = "local"
 
 # ── Scryfall (PRD §4e) ────────────────────────────────────────────────────────
 
@@ -359,16 +434,16 @@ def _apply_ui_settings() -> None:
         except (TypeError, ValueError):
             continue
     # Per-stage model tiers — only known stages, only known tier names.
+    # "local" (and "local:<model-id>") routes the stage to the LM Studio
+    # backend — see the Local LLM section below / local_llm.py.
     tiers = settings.get("model_tiers")
     if isinstance(tiers, dict):
         for stage_key, tier in tiers.items():
-            if stage_key in MODEL_TIERS and tier in ("haiku", "sonnet", "opus", "fable"):
-                env_var = {
-                    "select": "DECK_ENGINE_SELECT_MODEL",
-                    "judge": "DECK_ENGINE_JUDGE_MODEL",
-                    "optimize": "DECK_ENGINE_OPTIMIZE_MODEL",
-                    "card_tagger": "DECK_ENGINE_CARD_TAGGER_MODEL",
-                }.get(stage_key)
+            if stage_key in MODEL_TIERS and (
+                tier in ("haiku", "sonnet", "opus", "fable", "local")
+                or (isinstance(tier, str) and tier.startswith("local:"))
+            ):
+                env_var = _STAGE_MODEL_ENV_VARS.get(stage_key)
                 if env_var and os.environ.get(env_var):
                     continue
                 MODEL_TIERS[stage_key] = tier
@@ -395,3 +470,4 @@ def _apply_ui_settings() -> None:
 
 
 _apply_ui_settings()
+_apply_local_mode()  # after the UI overlay: the env switch outranks the settings file

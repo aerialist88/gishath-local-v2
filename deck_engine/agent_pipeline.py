@@ -67,6 +67,7 @@ PRD v4 AMENDMENT (2026-07-03) — token diet + synergy grounding:
 from __future__ import annotations
 
 import concurrent.futures
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -84,6 +85,91 @@ def _log(msg: str) -> None:
     if claude_cli.has_live_view():
         return
     print(f"  [{time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
+
+
+# Grounded ramp staples (first Foundry local run, 2026-07-17, run 5e98b5c1):
+# the EDHREC synergy pool is thematic and often carries almost no ramp, so a
+# drafter that can't be trusted to name staples from memory (the local
+# Qwen3.6 invented cards; validation deleted them; the ramp guard then
+# rightly halted the run at 0 ramp sources) has nowhere real to draw from.
+# This block extends the same grounding philosophy the pool established:
+# every name below is verified against the Scryfall cache and filtered to
+# the commander's color identity before it ever reaches a prompt.
+_RAMP_STAPLE_NAMES: tuple = (
+    # colorless rocks
+    "Sol Ring", "Arcane Signet", "Wayfarer's Bauble", "Mind Stone",
+    "Fellwar Stone", "Thought Vessel", "Commander's Sphere", "Worn Powerstone",
+    "Solemn Simulacrum",
+    # green land ramp / dorks
+    "Rampant Growth", "Cultivate", "Kodama's Reach", "Farseek",
+    "Nature's Lore", "Three Visits", "Sakura-Tribe Elder", "Llanowar Elves",
+    "Elvish Mystic", "Birds of Paradise", "Wood Elves",
+    # signets
+    "Azorius Signet", "Dimir Signet", "Rakdos Signet", "Gruul Signet",
+    "Selesnya Signet", "Orzhov Signet", "Izzet Signet", "Golgari Signet",
+    "Boros Signet", "Simic Signet",
+    # talismans
+    "Talisman of Progress", "Talisman of Dominance", "Talisman of Indulgence",
+    "Talisman of Impulse", "Talisman of Unity", "Talisman of Hierarchy",
+    "Talisman of Creativity", "Talisman of Resilience", "Talisman of Conviction",
+    "Talisman of Curiosity",
+)
+
+
+_WIPE_STAPLE_NAMES: tuple = (
+    "Blasphemous Act", "Chain Reaction",                      # red
+    "Toxic Deluge", "Damnation", "Deadly Tempest", "Crux of Fate",  # black
+    "Cyclonic Rift", "Evacuation", "River's Rebuke", "Perplexing Test",  # blue
+    "Wrath of God", "Day of Judgment", "Farewell", "Austere Command",    # white
+    "Ezuri's Predation",                                       # green (best it gets)
+)
+
+
+def _wipe_staples_block(concept, cache: dict) -> str:
+    """Guaranteed-real board wipes in the commander's colors — the wipes_min
+    quota was prompt-only and run 12 shipped zero sweepers (review, 2026-07-17).
+    Same grounding pattern as the ramp staples."""
+    identity = set(concept.color_identity or [])
+    lines = []
+    for name in _WIPE_STAPLE_NAMES:
+        card = cache.get(name.lower())
+        if not card:
+            continue
+        if not set(card.get("color_identity", [])) <= identity:
+            continue
+        oracle = scryfall_cache.oracle_text_of(card) or ""
+        summary = (oracle.split(".")[0].strip() + ".") if oracle else ""
+        lines.append(f"- {card.get('name', name)}: {summary}")
+    if not lines:
+        return ""
+    return (
+        "BOARD WIPE STAPLES — real, legal, in your colors; the deck needs 2-3 "
+        "mass-removal spells and multiplayer decks without them lose to any "
+        "resolved engine. Pick from THIS list rather than from memory:\n" + "\n".join(lines)
+    )
+
+
+def _ramp_staples_block(concept, cache: dict) -> str:
+    """A prompt block of guaranteed-real ramp cards inside the commander's color
+    identity, same compact one-line rendering as edhrec_pool.pool_block()."""
+    identity = set(concept.color_identity or [])
+    lines = []
+    for name in _RAMP_STAPLE_NAMES:
+        card = cache.get(name.lower())
+        if not card:
+            continue
+        if not set(card.get("color_identity", [])) <= identity:
+            continue
+        oracle = scryfall_cache.oracle_text_of(card) or ""
+        summary = (oracle.split(".")[0].strip() + ".") if oracle else "(mana rock)"
+        lines.append(f"- {card.get('name', name)}: {summary}")
+    if not lines:
+        return ""
+    return (
+        "RAMP STAPLES — every card below is real, legal, and in your colors, and "
+        "counts toward the ramp quota. The synergy pool is thin on ramp; fill the "
+        "quota from THIS list rather than from memory:\n" + "\n".join(lines)
+    )
 
 
 def _oracle_text_block(cache: dict, names: list[str]) -> str:
@@ -109,6 +195,25 @@ def _count_lands(cards: list[str], cache: dict) -> int:
     )
 
 
+# "Elvish Mystic (copy)" halted run 6 (2026-07-17): the local drafter wanted a
+# second copy of a singleton card and annotated it instead of picking another
+# card; three repair rounds never excised the phantom. Strip trailing
+# copy-count annotations — but ONLY when the raw name is not a real card and
+# the stripped one is, so genuine parenthetical names (B.F.M. (Big Furry
+# Monster)) survive. The stripped duplicate then falls to the normal
+# singleton dedupe below, and the count-fill machinery replaces it.
+_COPY_ANNOTATION_RE = re.compile(r"\s*\((?:copy(?:\s*\d+)?|x?\d+)\)\s*$", re.IGNORECASE)
+
+
+def _strip_copy_annotation(name: str, cache: dict) -> str:
+    if cache.get(name.lower()) is not None:
+        return name
+    stripped = _COPY_ANNOTATION_RE.sub("", name).strip()
+    if stripped != name and cache.get(stripped.lower()) is not None:
+        return stripped
+    return name
+
+
 def _normalize_draft_cards(cards: list[str], cache: dict) -> tuple[list[str], int]:
     """Deterministic cleanup of a raw draft list before the judge sees it:
     strips whitespace, drops empties, and removes duplicate copies of non-
@@ -124,6 +229,7 @@ def _normalize_draft_cards(cards: list[str], cache: dict) -> tuple[list[str], in
         name = str(raw).strip()
         if not name:
             continue
+        name = _strip_copy_annotation(name, cache)
         key = name.lower()
         card = cache.get(key)
         exempt = card is not None and scryfall_cache._is_singleton_exempt(card)  # noqa: SLF001 — same-package helper
@@ -139,7 +245,8 @@ def _normalize_draft_cards(cards: list[str], cache: dict) -> tuple[list[str], in
 _BASIC_FOR_COLOR = {"W": "Plains", "U": "Island", "B": "Swamp", "R": "Mountain", "G": "Forest"}
 
 
-def _top_up_basics(concept: ConceptChoice, cards: list[str], cache: dict) -> tuple[list[str], list[str]]:
+def _top_up_basics(concept: ConceptChoice, cards: list[str], cache: dict,
+                   fill_to_count: bool = False) -> tuple[list[str], list[str]]:
     """Deterministic, model-free mana-base fill: while the deck is BOTH under
     config.DECK_SIZE-1 cards AND under the land_min quota, append basics
     weighted by the deck's colored-pip counts. Adding basics is the one deck
@@ -147,6 +254,9 @@ def _top_up_basics(concept: ConceptChoice, cards: list[str], cache: dict) -> tup
     basics" is pure waste, and the model repairs have historically botched the
     arithmetic while at it. Decks at exactly 99 with too few lands still go to
     the model (choosing which nonland to cut is a quality judgment).
+    fill_to_count=True ignores the land quota and fills all the way to
+    DECK_SIZE-1 — the repair loop's last resort when no model attempts remain
+    and the deck is short (a few extra basics beat failing the run).
     Returns (new_cards, added_basics)."""
     land_min = int(config.ROLE_QUOTA_DEFAULTS.get("land_min", 0))
     identity = [c for c in (concept.color_identity or []) if c in _BASIC_FOR_COLOR]
@@ -154,7 +264,7 @@ def _top_up_basics(concept: ConceptChoice, cards: list[str], cache: dict) -> tup
     current = list(cards)
     lands = _count_lands(current, cache)
     room = (config.DECK_SIZE - 1) - len(current)
-    needed = min(room, land_min - lands)
+    needed = room if fill_to_count else min(room, land_min - lands)
     if needed <= 0:
         return current, []
 
@@ -249,13 +359,30 @@ DRAFT_JSON_SCHEMA = {
             "description": "5-10 exact, real card names this draft's gameplan depends on — the judge "
                            "gets their real oracle text as ground truth.",
         },
-        "cards": {
+        # Grammar-counted decklist, round three (Foundry runs 1-5, 2026-07-17):
+        # an unbounded "cards" array drafted 113 cards; an exactly-99 "cards"
+        # array drafted 99 spells and 3 lands. Constrained decoding can count
+        # but the local model can't budget, so the schema now does BOTH: a
+        # fixed 36-land array and a fixed 63-nonland array (36+63 = the 99).
+        # _draft() concatenates them back into the pipeline's usual flat list;
+        # every downstream stage is unchanged.
+        "lands": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "The complete decklist (commander excluded), exact printed names.",
+            "minItems": 36,
+            "maxItems": 36,
+            "description": "Exactly 36 lands, each listed individually — basics repeat (e.g. "
+                           "'Forest' eight times), nonbasics are singletons.",
+        },
+        "nonlands": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 63,
+            "maxItems": 63,
+            "description": "Exactly 63 distinct nonland cards (commander excluded), exact printed names.",
         },
     },
-    "required": ["angle_name", "gameplan_summary", "key_cards", "cards"],
+    "required": ["angle_name", "gameplan_summary", "key_cards", "lands", "nonlands"],
 }
 
 SWAP_JSON_SCHEMA_ITEM = {
@@ -278,6 +405,7 @@ SYNERGY_REPAIR_JSON_SCHEMA = {
         "swaps": {
             "type": "array",
             "description": "Targeted replacements only — generic card out, on-mechanic card in.",
+            "maxItems": 15,  # grammar bound — a looping local model spams unbounded arrays (Fellwar Stone loop, 2026-07-17)
             "items": SWAP_JSON_SCHEMA_ITEM,
         },
     },
@@ -294,11 +422,13 @@ REPAIR_JSON_SCHEMA = {
         "swaps": {
             "type": "array",
             "description": "1-for-1 replacements for illegal/hallucinated/off-color cards.",
+            "maxItems": 30,  # grammar bound — a looping local model spams unbounded arrays (Fellwar Stone loop, 2026-07-17)
             "items": SWAP_JSON_SCHEMA_ITEM,
         },
         "cuts": {
             "type": "array",
             "description": "Exact card names to remove (one entry removes one copy) — for fixing an over-count.",
+            "maxItems": 30,  # grammar bound — a looping local model spams unbounded arrays (Fellwar Stone loop, 2026-07-17)
             "items": {"type": "string"},
         },
         "adds": {
@@ -332,6 +462,7 @@ JUDGE_JSON_SCHEMA = {
             "type": "array",
             "description": "Surgical cherry-picks applied to the WINNING draft's list (typically cards "
                            "borrowed from losing drafts). Empty list if the winner is already coherent.",
+            "maxItems": 10,  # grammar bound — a looping local model spams unbounded arrays (Fellwar Stone loop, 2026-07-17)
             "items": SWAP_JSON_SCHEMA_ITEM,
         },
     },
@@ -369,6 +500,7 @@ OPTIMIZE_JSON_SCHEMA = {
             "type": "array",
             "description": "Targeted changes only. Empty list if the deck needs no changes. Ignored if "
                            "strategy_valid is false.",
+            "maxItems": 15,  # grammar bound — a looping local model spams unbounded arrays (Fellwar Stone loop, 2026-07-17)
             "items": SWAP_JSON_SCHEMA_ITEM,
         },
         "changes_made": {"type": "string"},
@@ -381,7 +513,8 @@ OPTIMIZE_JSON_SCHEMA = {
 }
 
 
-def _apply_swaps(cards: list[str], swaps: list[dict], strict: bool = False) -> tuple[list[str], list[str]]:
+def _apply_swaps(cards: list[str], swaps: list[dict], strict: bool = False,
+                 demote_duplicate_add_to_cut: bool = False) -> tuple[list[str], list[str]]:
     """PRD v4 amendment T3: applies optimize's swap deltas to the existing decklist
     in code, rather than trusting a regurgitated full list. Returns (new_cards,
     warnings) — a `remove` name not found in the current list is a warning, not a
@@ -409,6 +542,21 @@ def _apply_swaps(cards: list[str], swaps: list[dict], strict: bool = False) -> t
         # replacements untagged and unpriced). Basics are singleton-exempt.
         add_key = add_name.lower()
         if add_key in lower_map and add_key not in scryfall_cache._BASIC_LAND_NAMES:  # noqa: SLF001 — same-package constant
+            # In repair mode the remove target is a validation offender, so
+            # "skip entirely, keep the remove" trades a fixable undercount for
+            # an unfixable legality failure (run 46858f10: the final repair
+            # attempt swapped the one remaining off-color land for a dual
+            # already in the deck; the skip kept the offender and failed the
+            # run). Apply the cut anyway — the repair loop's basics top-up and
+            # last-resort count fill restore the deck to size.
+            if demote_duplicate_add_to_cut and remove_name.lower() in lower_map:
+                actual_name = lower_map.pop(remove_name.lower())
+                result.remove(actual_name)
+                warnings.append(
+                    f"swap wants to add {add_name!r}, which is already in the decklist — "
+                    f"cut {remove_name!r} anyway and dropped the duplicate add."
+                )
+                continue
             warnings.append(
                 f"swap wants to add {add_name!r}, which is already in the decklist — "
                 f"skipping the swap entirely ({remove_name!r} kept)."
@@ -446,8 +594,12 @@ def _apply_repair_deltas(cards: list[str], parsed: dict) -> tuple[list[str], lis
     schema replaces. Cuts remove one copy each (so 'cut the duplicate
     Necroskitter' works on a list with two); unknown cut targets are warned and
     ignored. Adds are appended as-is — the caller re-validates, which catches a
-    hallucinated add."""
-    current, warnings = _apply_swaps(cards, parsed.get("swaps", []), strict=True)
+    hallucinated add. Duplicate-add swaps demote to a bare cut here (unlike the
+    judge/optimize paths) because repair swaps target validation offenders —
+    keeping the offender fails the run, while running a card short is refilled
+    in code (run 46858f10)."""
+    current, warnings = _apply_swaps(cards, parsed.get("swaps", []), strict=True,
+                                     demote_duplicate_add_to_cut=True)
 
     for raw_name in parsed.get("cuts", []):
         name = str(raw_name).strip()
@@ -458,10 +610,20 @@ def _apply_repair_deltas(cards: list[str], parsed: dict) -> tuple[list[str], lis
         else:
             current.pop(idx)
 
+    # Adds fill ROOM, never inflate (run 10, Tatyova, 2026-07-17: the local
+    # model answered quota complaints with 6 bare adds and no cuts, growing a
+    # 99 to 105 that no later attempt could shrink — the same count-inflation
+    # failure strict swaps already guard against, through the other door).
+    room = (config.DECK_SIZE - 1) - len(current)
     for raw_name in parsed.get("adds", []):
         name = str(raw_name).strip()
-        if name:
-            current.append(name)
+        if not name:
+            continue
+        if room <= 0:
+            warnings.append(f"repair add {name!r} ignored — the deck is already at count.")
+            continue
+        current.append(name)
+        room -= 1
 
     return current, warnings
 
@@ -534,6 +696,9 @@ def _draft(
             disallowed_tools=config.DISALLOWED_SEARCH_TOOLS,
         )
         parsed = result.parsed_json()
+        if "cards" not in parsed and "lands" in parsed:
+            # local grammar-split draft (see DRAFT_JSON_SCHEMA) — reassemble
+            parsed["cards"] = list(parsed["lands"]) + list(parsed["nonlands"])
         _log(f"draft {i + 1}/{n} done in {time.monotonic() - t0:.0f}s — "
              f"angle: {parsed.get('angle_name', '?')}, {len(parsed.get('cards', []))} cards")
         return parsed
@@ -645,11 +810,27 @@ def _validate_and_repair(
     min_lands = max(0, land_min - 2)
     ramp_min = int(config.ROLE_QUOTA_DEFAULTS.get("ramp_min", 0))
     min_ramp = max(0, ramp_min - 3)
+    wipes_min = int(config.ROLE_QUOTA_DEFAULTS.get("wipes_min", 0))
+    min_wipes = max(0, wipes_min - 1)  # tripwire under quota, message targets quota
 
     def _validate(deck_cards: list[str]) -> ValidationResult:
         return scryfall_cache.validate_deck(concept.commander, deck_cards, cache=cache,
                                             min_lands=min_lands, land_target=land_min,
-                                            min_ramp=min_ramp, ramp_target=ramp_min)
+                                            min_ramp=min_ramp, ramp_target=ramp_min,
+                                            min_wipes=min_wipes, wipe_target=wipes_min)
+
+    # The commander belongs in the command zone, not the 99 — the local
+    # drafter shipped a second Tatyova inside its own list (run 12,
+    # 2026-07-17) and no gate caught it; cloud drafters never made this
+    # mistake so none existed. Code fix, pool refill, same as every other
+    # not-a-judgment-call flaw.
+    cmd_key = concept.commander.strip().lower()
+    without_cmd = [c for c in cards if str(c).strip().lower() != cmd_key]
+    if len(without_cmd) != len(cards):
+        n = len(cards) - len(without_cmd)
+        cards, refills = _fill_from_pool(concept, without_cmd, cache, n)
+        _log(f"{stage_prefix}: removed {n} copy(ies) of the commander from the 99 in code"
+             + (f" — refilled from pool: {', '.join(refills)}" if refills else ""))
 
     current, added_basics = _top_up_basics(concept, cards, cache)
     if added_basics:
@@ -661,11 +842,33 @@ def _validate_and_repair(
     for attempt in range(1, max_attempts + 1):
         if validation.is_valid:
             break
+        # Hallucinated names are a CODE fix, not a judgment call (run 9,
+        # Zilortha, 2026-07-17: three model repairs failed to excise two
+        # not-real cards and the run halted): a card that does not exist is
+        # deleted and its slot refilled from the ranked synergy pool. Only
+        # the genuine judgment flaws (color identity, legality, quotas) go
+        # to the model below.
+        fakes = [c for c in validation.unknown_cards if c != concept.commander]
+        if fakes:
+            current = [c for c in current if c not in fakes]
+            current, refills = _fill_from_pool(concept, current, cache, len(fakes))
+            _log(f"{stage_prefix}: dropped {len(fakes)} hallucinated card(s) in code "
+                 f"({', '.join(fakes)})" + (f" — refilled from pool: {', '.join(refills)}" if refills else ""))
+            current, added = _top_up_basics(concept, current, cache, fill_to_count=True)
+            if added:
+                _log(f"{stage_prefix}: pool short — {len(added)} basic(s) hold the count")
+            validation = _validate(current)
+            if validation.is_valid:
+                break
         _log(f"{stage_prefix}: repair attempt {attempt}/{max_attempts}...")
         prompt = prompt_helpers.render(
             "validate_repair.md",
             commander=concept.commander, color_identity=", ".join(concept.color_identity) or "colorless",
-            repair_notes=validation.as_repair_notes(),
+            repair_notes=validation.as_repair_notes()
+            + ("\n\n" + _ramp_staples_block(concept, cache)
+               if "ramp" in validation.as_repair_notes().lower() else "")
+            + ("\n\n" + _wipe_staples_block(concept, cache)
+               if "wipe" in validation.as_repair_notes().lower() else ""),
             card_count=len(current), deck_size_minus_1=config.DECK_SIZE - 1,
             current_decklist_block="\n".join(f"- {c}" for c in current),
         )
@@ -678,6 +881,24 @@ def _validate_and_repair(
         current, repair_warnings = _apply_repair_deltas(current, result.parsed_json())
         for warning in repair_warnings:
             _log(f"{stage_prefix}: repair {attempt} — {warning}")
+        # Re-normalize after every repair: a repair's added names can carry the
+        # same copy-annotations / duplicates a draft's can (run 6, 2026-07-17).
+        current, repair_dupes = _normalize_draft_cards(current, cache)
+        if repair_dupes:
+            _log(f"{stage_prefix}: repair {attempt} — dropped {repair_dupes} duplicate(s) in code")
+        # Over-count backstop: shed excess basics while the land quota allows —
+        # the one over-count cut code can always make safely (run 10, Tatyova).
+        land_min = int(config.ROLE_QUOTA_DEFAULTS.get("land_min", 0))
+        trimmed = 0
+        while (len(current) > config.DECK_SIZE - 1
+               and _count_lands(current, cache) > land_min
+               and any(c in _BASIC_NAMES for c in current)):
+            from collections import Counter
+            basics = Counter(c for c in current if c in _BASIC_NAMES)
+            current.reverse(); current.remove(basics.most_common(1)[0][0]); current.reverse()
+            trimmed += 1
+        if trimmed:
+            _log(f"{stage_prefix}: repair {attempt} — trimmed {trimmed} excess basic(s) in code")
         # A repair that cut cards may have re-opened room for the code-level
         # basics top-up — run it again before burning another model attempt.
         current, added_basics = _top_up_basics(concept, current, cache)
@@ -687,7 +908,205 @@ def _validate_and_repair(
         _log(f"{stage_prefix}: repair {attempt}/{max_attempts} done in {time.monotonic() - t0:.0f}s — "
              f"{'PASSED' if validation.is_valid else 'still failing'}")
 
+    # Last-resort count fill (run 46858f10): a demoted duplicate-add swap can
+    # leave the deck under DECK_SIZE-1 with lands still at quota, which the
+    # normal top-up won't touch. With no repair attempts left, fill from the
+    # synergy pool FIRST (run 45813889: basics-only filling here is how 11
+    # lost spell slots became a 47-land flood), then basics for any remainder.
+    if not validation.is_valid and len(current) < config.DECK_SIZE - 1:
+        shortfall = (config.DECK_SIZE - 1) - len(current)
+        current, pool_fill = _fill_from_pool(concept, current, cache, shortfall)
+        if pool_fill:
+            _log(f"{stage_prefix}: post-repair count fill — {len(pool_fill)} from the synergy pool "
+                 f"({', '.join(pool_fill)})")
+        if len(current) < config.DECK_SIZE - 1:
+            current, filler = _top_up_basics(concept, current, cache, fill_to_count=True)
+            if filler:
+                _log(f"{stage_prefix}: post-repair count fill — added {len(filler)} basic(s) in code "
+                     f"({', '.join(sorted(set(filler)))})")
+        validation = _validate(current)
+
+    # Ceiling rebalance (code-only, no model calls) — see _rebalance_mana.
+    if validation.is_valid:
+        current, rebalance_notes = _rebalance_mana(concept, current, cache)
+        for note in rebalance_notes:
+            _log(f"{stage_prefix}: {note}")
+        if rebalance_notes:
+            validation = _validate(current)
+
     return current, validation
+
+
+# Mana-flood rebalance (first delivered Foundry deck, 2026-07-17, run 45813889:
+# 47 lands + ~20 ramp in the shipped 100 — Trevor's review called it "a flood
+# machine", and the mechanism was ours: every duplicate/hallucinated spell the
+# local drafter lost to validation was refilled with a BASIC, and the ramp
+# staples block had a floor but no ceiling. Cloud models kept ceilings by
+# judgment; the local model needs them kept by code.)
+#
+# Generic mana rocks/sorceries it is always safe to cut when ramp is over
+# quota, in cut-first order. Deliberately EXCLUDES Sol Ring/Arcane Signet
+# (auto-keeps), mana dorks (sacrifice fodder in the right decks), and
+# anything not on the list — synergy pieces that merely read as ramp
+# (Phyrexian Altar, Deadly Dispute) must never be cut by code.
+_RAMP_CUT_ORDER: tuple = (
+    "Worn Powerstone", "Commander's Sphere", "Thought Vessel", "Big Score",
+    "Mind Stone", "Wayfarer's Bauble", "Fellwar Stone",
+    "Talisman of Progress", "Talisman of Dominance", "Talisman of Indulgence",
+    "Talisman of Impulse", "Talisman of Unity", "Talisman of Hierarchy",
+    "Talisman of Creativity", "Talisman of Resilience", "Talisman of Conviction",
+    "Talisman of Curiosity",
+    "Azorius Signet", "Dimir Signet", "Rakdos Signet", "Gruul Signet",
+    "Selesnya Signet", "Orzhov Signet", "Izzet Signet", "Golgari Signet",
+    "Boros Signet", "Simic Signet",
+    "Kodama's Reach", "Cultivate", "Rampant Growth", "Farseek",
+    "Three Visits", "Nature's Lore", "Solemn Simulacrum",
+)
+
+_BASIC_NAMES: tuple = ("Plains", "Island", "Swamp", "Mountain", "Forest", "Wastes")
+
+# Lands that DO something — swapped in for excess basics by _rebalance_mana
+# (run 12 review: 30 basics in 38 lands, "basic lands have no abilities").
+# Color-agnostic utility first, then the channel lands (colored identity,
+# filtered per commander like everything else).
+_UTILITY_LAND_STAPLES: tuple = (
+    "Fabled Passage", "Evolving Wilds", "Terramorphic Expanse", "Myriad Landscape",
+    "Ash Barrens", "Ghost Quarter", "Demolition Field", "Scavenger Grounds",
+    "Exotic Orchard", "Path of Ancestry",
+    "Boseiju, Who Endures", "Otawara, Soaring City", "Sokenzan, Crucible of Defiance",
+    "Takenuma, Abandoned Mire", "Eiganjo, Seat of the Empire",
+)
+_MAX_BASICS_SHARE: float = 0.68   # trim basics above ~26 of 38 lands
+
+
+def _fill_from_pool(concept: ConceptChoice, cards: list[str], cache: dict, n: int) -> tuple[list[str], list[str]]:
+    """Refill freed deck slots with real, color-legal, on-mechanic NONLAND
+    cards from the EDHREC pool (in pool-rank order) instead of basics — the
+    dedupe->basics conversion is how run 45813889 flooded to 47 lands.
+    Skips ramp-classified candidates so a refill can never re-inflate the ramp
+    count this function's caller may just have trimmed. Returns
+    (new_cards, added). Degrades to no-op on an empty/unusable pool."""
+    if n <= 0:
+        return list(cards), []
+    identity = set(concept.color_identity or [])
+    have = {str(c).strip().lower() for c in cards}
+    added: list[str] = []
+    try:
+        pool = edhrec_pool.fetch_pool(concept.commander)
+    except Exception:  # noqa: BLE001 — pool is never on the critical path
+        pool = []
+    for name in pool:
+        if len(added) >= n:
+            break
+        key = str(name).strip().lower()
+        if key in have:
+            continue
+        card = cache.get(key)
+        if card is None:
+            continue
+        if "land" in ((card.get("type_line") or "").lower()):
+            continue
+        if not set(card.get("color_identity", [])) <= identity:
+            continue
+        if scryfall_cache.is_ramp_card(card):
+            continue
+        added.append(card.get("name", name))
+        have.add(key)
+    return list(cards) + added, added
+
+
+def _rebalance_mana(concept: ConceptChoice, cards: list[str], cache: dict) -> tuple[list[str], list[str]]:
+    """Deterministic, model-free ceiling enforcement: trim excess basics down
+    to the land quota ceiling and excess GENERIC ramp (cut-first list above)
+    down to the ramp ceiling, refilling every freed slot from the EDHREC pool.
+    The floors' twin — same "code does arithmetic, model does judgment"
+    philosophy as _top_up_basics, pointed the other way. Returns
+    (new_cards, log_notes)."""
+    land_max = int(config.ROLE_QUOTA_DEFAULTS.get("land_max", 0)) or 99
+    ramp_max = int(config.ROLE_QUOTA_DEFAULTS.get("ramp_max", 0)) or 99
+    current = list(cards)
+    notes: list[str] = []
+
+    # 1. Land ceiling — cut only basics (utility-land cuts are judgment calls),
+    #    most-numerous basic type first, keeping the pip balance roughly intact.
+    lands = _count_lands(current, cache)
+    cut_lands = 0
+    while lands > land_max:
+        basics = [c for c in current if c in _BASIC_NAMES]
+        if not basics:
+            break
+        from collections import Counter
+        most_common = Counter(basics).most_common(1)[0][0]
+        current.reverse(); current.remove(most_common); current.reverse()  # drop the LAST copy
+        lands -= 1
+        cut_lands += 1
+
+    # 1.5 Land QUALITY — swap excess basics for utility lands that Tatyova-class
+    #     commanders and recursion packages can actually use (1:1 land swaps,
+    #     land count and card count both unchanged).
+    from collections import Counter
+    identity = set(concept.color_identity or [])
+    basics = [c for c in current if c in _BASIC_NAMES]
+    max_basics = int(lands * _MAX_BASICS_SHARE) if lands else len(basics)
+    swapped_in: list[str] = []
+    if len(basics) > max_basics:
+        have = {str(c).strip().lower() for c in current}
+        for name in _UTILITY_LAND_STAPLES:
+            if len(basics) - len(swapped_in) <= max_basics:
+                break
+            key = name.lower()
+            if key in have:
+                continue
+            card = cache.get(key)
+            if card is None or not set(card.get("color_identity", [])) <= identity:
+                continue
+            most_common = Counter(c for c in current if c in _BASIC_NAMES).most_common(1)[0][0]
+            current.reverse(); current.remove(most_common); current.reverse()
+            current.append(card.get("name", name))
+            have.add(key)
+            swapped_in.append(card.get("name", name))
+        if swapped_in:
+            notes.append(f"rebalance: upgraded {len(swapped_in)} basic(s) to utility lands "
+                         f"({', '.join(swapped_in)})")
+
+    # 2. Ramp ceiling — cut strictly from the generic list, in order.
+    def _ramp_names() -> list[str]:
+        out = []
+        for c in current:
+            card = cache.get(str(c).strip().lower())
+            if card is None or "land" in ((card.get("type_line") or "").lower()):
+                continue
+            if scryfall_cache.is_ramp_card(card):
+                out.append(c)
+        return out
+
+    cut_ramp: list[str] = []
+    ramp_count = len(_ramp_names())
+    if ramp_count > ramp_max:
+        for cut in _RAMP_CUT_ORDER:
+            if ramp_count <= ramp_max:
+                break
+            if cut in current:
+                current.remove(cut)
+                cut_ramp.append(cut)
+                ramp_count -= 1
+
+    freed = cut_lands + len(cut_ramp)
+    if freed:
+        current, refills = _fill_from_pool(concept, current, cache, freed)
+        if cut_lands:
+            notes.append(f"rebalance: cut {cut_lands} excess basic(s) (lands were over the {land_max} ceiling)")
+        if cut_ramp:
+            notes.append(f"rebalance: cut {len(cut_ramp)} generic ramp ({', '.join(cut_ramp)})")
+        if refills:
+            notes.append(f"rebalance: refilled {len(refills)} slot(s) from the synergy pool ({', '.join(refills)})")
+        # Pool couldn't cover everything — restore count with basics as the
+        # true last resort (a slightly floody deck beats a short one).
+        if len(current) < config.DECK_SIZE - 1:
+            current, filler = _top_up_basics(concept, current, cache, fill_to_count=True)
+            if filler:
+                notes.append(f"rebalance: pool short — {len(filler)} basic(s) back in to hold the count")
+    return current, notes
 
 
 def _optimize(
@@ -791,11 +1210,21 @@ def _synergy_gate_and_repair(
             deck_size_minus_1=config.DECK_SIZE - 1,
         )
         t0 = time.monotonic()
-        result = claude_cli.run(
-            prompt, run_id=run_id, stage=f"{stage_prefix}/synergy-repair-{attempt}",
-            model_tier_key="validate_repair", json_schema=SYNERGY_REPAIR_JSON_SCHEMA,
-            disallowed_tools=config.DISALLOWED_SEARCH_TOOLS,
-        )
+        try:
+            result = claude_cli.run(
+                prompt, run_id=run_id, stage=f"{stage_prefix}/synergy-repair-{attempt}",
+                model_tier_key="validate_repair", json_schema=SYNERGY_REPAIR_JSON_SCHEMA,
+                disallowed_tools=config.DISALLOWED_SEARCH_TOOLS,
+            )
+        except claude_cli.ClaudeCLIError as exc:
+            # The deck entering this loop is already Scryfall-valid; the gate is
+            # a backstop, never a blocker (config.SYNERGY_GATE_THRESHOLD note).
+            # A failed repair CALL — e.g. the local loop detector aborting a
+            # runaway generation (run 11, Tatyova, 2026-07-17) — must ship the
+            # flagged deck, not halt the night.
+            _log(f"{stage_prefix}: synergy repair {attempt} call failed ({exc}) — "
+                 f"skipping this attempt; the deck ships flagged if none succeed")
+            continue
         # T3 (2026-07-10): swap deltas applied in code, not a regurgitated full
         # list. Malformed swaps are warnings, and the Scryfall repair loop below
         # re-validates the applied result either way. Ramp-stripping swaps are
@@ -847,6 +1276,12 @@ def _run_one_attempt(
     # a "no pool" placeholder + pool_used=False on any fetch failure or thin-data
     # commander; see edhrec_pool.py).
     edhrec_pool_text, edhrec_pool_used = edhrec_pool.pool_block(concept.commander, cache)
+    ramp_block = _ramp_staples_block(concept, cache)
+    if ramp_block:
+        edhrec_pool_text = f"{edhrec_pool_text}\n\n{ramp_block}"
+    wipe_block = _wipe_staples_block(concept, cache)
+    if wipe_block:
+        edhrec_pool_text = f"{edhrec_pool_text}\n\n{wipe_block}"
 
     drafts = _draft(run_id, concept, attempt, edhrec_pool_text, retry_note=retry_note)
     chosen, raw_cards, build_brief, key_cards, judge_swap_warnings, judge_session_id = _judge(

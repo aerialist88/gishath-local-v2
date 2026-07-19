@@ -7,6 +7,7 @@ Run manually: cd gishath-local-v2 && python3 -m deck_engine.tests.test_v4_amendm
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timezone
 
 from .. import card_tagger, edhrec_pool, emailer, export, synergy_check
 from ..agent_pipeline import DeckResult, _apply_swaps
@@ -138,6 +139,60 @@ def test_edhrec_slugify() -> list[str]:
         got = edhrec_pool._slugify(commander)  # noqa: SLF001
         if got != expected:
             problems.append(f"{commander!r}: expected slug {expected!r}, got {got!r}")
+    return problems
+
+
+def test_edhrec_proportional_trim_keeps_tail_sections() -> list[str]:
+    """Regression for the Sol Ring truncation (2026-07-14): EDHREC pages list
+    manaartifacts/lands last, and the old flat first-150 slice always dropped
+    them. The proportional trim must keep every section's top cards."""
+    problems = []
+    # Shaped like a real page: big early sections, small tail sections.
+    payload = {"container": {"json_dict": {"cardlists": [
+        {"tag": "highsynergycards", "cardviews": [{"name": f"Synergy {i}"} for i in range(10)]},
+        {"tag": "creatures", "cardviews": [{"name": f"Creature {i}"} for i in range(80)]},
+        {"tag": "instants", "cardviews": [{"name": f"Instant {i}"} for i in range(60)]},
+        {"tag": "sorceries", "cardviews": [{"name": f"Sorcery {i}"} for i in range(50)]},
+        {"tag": "manaartifacts", "cardviews": [{"name": "Sol Ring"}]
+            + [{"name": f"Rock {i}"} for i in range(9)]},
+        {"tag": "lands", "cardviews": [{"name": f"Land {i}"} for i in range(40)]},
+    ]}}}
+    sections = edhrec_pool._extract_card_sections(payload)  # noqa: SLF001
+    pool = edhrec_pool._proportional_trim(sections, edhrec_pool.EDHREC_POOL_TARGET)  # noqa: SLF001
+    if len(pool) != edhrec_pool.EDHREC_POOL_TARGET:
+        problems.append(f"trim must hit the target exactly, got {len(pool)}")
+    if "Sol Ring" not in pool:
+        problems.append("the manaartifacts section's top card (Sol Ring) must survive the trim")
+    if not any(name.startswith("Land ") for name in pool):
+        problems.append("the lands section must survive the trim")
+    if "Synergy 9" not in pool:
+        problems.append("small early sections must be kept nearly whole")
+    # No trim needed when the page is already under target.
+    small = [["A", "B"], ["C"]]
+    if edhrec_pool._proportional_trim(small, 150) != ["A", "B", "C"]:  # noqa: SLF001
+        problems.append("under-target pages must pass through untrimmed")
+    return problems
+
+
+def test_edhrec_cache_format_bump_invalidates_flat_pools() -> list[str]:
+    """Format-1 caches (flat-slice pools, no 'format' key) must read as stale so
+    the next run refetches with the proportional trim."""
+    problems = []
+    import json as _json
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as td:
+        old = Path(td) / "old.json"
+        old.write_text(_json.dumps({"fetched_at": datetime.now(timezone.utc).isoformat(),
+                                    "commander": "X", "cards": ["A"] * 150}))
+        if edhrec_pool._cache_fresh(old):  # noqa: SLF001
+            problems.append("a cache without the current format marker must be treated as stale")
+        new = Path(td) / "new.json"
+        new.write_text(_json.dumps({"format": edhrec_pool.EDHREC_CACHE_FORMAT,
+                                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                                    "commander": "X", "cards": ["A"] * 150}))
+        if not edhrec_pool._cache_fresh(new):  # noqa: SLF001
+            problems.append("a current-format fresh cache must still read as fresh")
     return problems
 
 
@@ -282,6 +337,8 @@ def main() -> int:
         test_card_tagger_heuristics_no_model_call,
         test_synergy_gate_counts_and_threshold,
         test_edhrec_slugify,
+        test_edhrec_proportional_trim_keeps_tail_sections,
+        test_edhrec_cache_format_bump_invalidates_flat_pools,
         test_edhrec_pool_block_fallback_under_min_size,
         test_newsletter_strips_diagnostics_for_friends_copy,
         test_moxfield_lists_basics_individually,

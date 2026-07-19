@@ -47,6 +47,26 @@ You have two jobs this pass, in order:
    is not a package. Swap orphans for cards whose support genuinely exists in this list; note
    them in changes_made as orphan cuts.
 
+   Also check WIN CONDITION DENSITY: name to yourself at least TWO distinct lines this deck
+   can take to actually END a game from a stable board — not "accrue value" or "control the
+   table", but close it out. A single win condition with no tutor that finds it is a single
+   point of failure: one counterspell, theft, or a forced discard and the deck can lock a
+   table it is structurally unable to beat (a real shipped political-control deck had exactly
+   one wincon, no tutor for it, and a wheel effect that could discard it). If the deck has
+   fewer than two realistic closing lines, swap the weakest value slot for a compact second
+   win condition (or a tutor that reliably finds the existing one) that fits the deck's theme;
+   note it in changes_made as a wincon-density fix.
+
+   Also check for SELF-DEFEATING cards: any card whose symmetric or downside text hits THIS
+   deck's own engine harder than it hits opponents — symmetric damage/destruction sweepers in
+   a deck whose plan is a board of small tokens, wheel/discard-all effects in a deck with one
+   irreplaceable card it must hold, "each player" gifts in a deck with no way to profit from
+   them. Judge against this deck's actual gameplan, not the card's general playability: a
+   fine card in the abstract can be a liability in this exact list (a real shipped token deck
+   carried three symmetric sweepers that each destroyed its own 1/1 fleet). Keep at most one
+   true board reset; swap the rest for one-sided or token-sparing alternatives, and note them
+   in changes_made as self-defeating cuts.
+
    Also review SYNERGY DENSITY as part of this pass: does this decklist actually lean into
    $commander's specific mechanic (per the oracle text above), or does it read more like a
    generic goodstuff pile in these colors with the commander attached? A deck that a

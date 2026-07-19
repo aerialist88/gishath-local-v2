@@ -54,7 +54,10 @@ DB_PATH = os.path.join(_BASE_DIR, "state", "collection.db")
 APP_SEARCH_URL = "http://127.0.0.1:5003/search"
 BATCH_NAMES = 10           # unique card names per /search call
 BATCH_PAUSE_S = 10.0       # polite gap between batches
-SEARCH_TIMEOUT_S = 120.0   # /search's own budget is 60s
+SEARCH_BUDGET_S = 30.0     # per-batch /search budget — bulk pricing doesn't
+                           # wait out a slow store (Agora) the way an
+                           # interactive deal-hunt search (default 60s) does
+SEARCH_TIMEOUT_S = 120.0   # httpx cap; must stay above SEARCH_BUDGET_S
 REFRESH_AGE_DAYS = 7       # re-price items not checked within this window
 
 _SCHEMA = """
@@ -329,7 +332,9 @@ def _pending_names(conn: sqlite3.Connection) -> list[str]:
 
 def _price_names(names: list[str]) -> None:
     """One batch: search, match every item of those names, commit."""
-    resp = httpx.post(APP_SEARCH_URL, json={"buy_list": names}, timeout=SEARCH_TIMEOUT_S)
+    resp = httpx.post(APP_SEARCH_URL,
+                      json={"buy_list": names, "budget_seconds": SEARCH_BUDGET_S},
+                      timeout=SEARCH_TIMEOUT_S)
     resp.raise_for_status()
     results = resp.json().get("results", [])
 

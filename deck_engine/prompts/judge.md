@@ -34,7 +34,9 @@ Judging criteria, in order:
    decision — treat that as a real defect when comparing otherwise-close drafts, not a
    cosmetic one. A deck that cannot cast its commander on time loses regardless of how
    synergistic its list reads, and a deck far under the draw/interaction/wipe quotas cannot
-   survive three opponents.
+   survive three opponents. Soundness also means the deck can END a game: a draft with fewer
+   than two realistic closing lines (or one wincon and no tutor to find it) will stall out a
+   table it otherwise dominates — treat that as a structural defect too.
 
 Return, via the provided JSON schema:
 - `chosen_draft`: the 1-based number of the winning draft.

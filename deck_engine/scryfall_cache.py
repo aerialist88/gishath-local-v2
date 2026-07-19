@@ -91,10 +91,27 @@ _SKIP_LAYOUTS = {
 }
 _SKIP_SET_TYPES = {"memorabilia"}
 
+# Special-treatment printings (showcase frames, borderless/full-art, Secret
+# Lair variants, ...). These are real, legal cards — never skipped — but when
+# several printings share a name key, the plainest standard paper printing
+# should win, because the cached image_uris feed the Atelier/gallery card
+# images and Trevor wants the normal version on hover, not an alt-art variant
+# (2026-07-15). Frame effects that appear on ORDINARY printings (legendary
+# crown, miracle, nyxtouched, devoid, snow, companion, tombstone, ...) are
+# deliberately NOT listed here.
+_SPECIAL_FRAME_EFFECTS = {
+    "showcase", "extendedart", "inverted", "colorshifted", "etched",
+    "shatteredglass", "gilded", "textured", "draft",
+}
+# set_types whose printings are always special versions of cards that also
+# exist in normal sets (Expeditions/Invocations, Signature Spellbooks, promo
+# sets, silver-border/Secret Lair "funny", Arena alchemy rebalances).
+_SPECIAL_SET_TYPES = {"masterpiece", "spellbook", "promo", "funny", "alchemy", "minigame"}
+
 # Bump when the trim/skip rules above (or _trim_bulk_cards itself) change, so
 # refresh_if_stale() treats caches built under the old rules as stale
 # regardless of age — same reasoning as the "keep_fields" stamp below.
-_TRIM_SCHEMA = 2
+_TRIM_SCHEMA = 3
 
 # Basic lands (incl. Wastes and their Snow- variants) are singleton-exempt.
 _BASIC_LAND_NAMES = {
@@ -130,27 +147,58 @@ def _find_default_cards_uri(bulk_index: dict) -> str:
     raise RuntimeError("Scryfall bulk-data index had no 'default_cards' entry — API contract may have changed.")
 
 
+def _printing_score(card: dict, direct: bool) -> tuple:
+    """Rank printings competing for the same name key; highest tuple wins.
+
+    Ordered by importance:
+      1. real card data (a blank reversible_card/collector entry never holds a
+         key against a real card — the 2026-07-11 shadowing incident),
+      2. direct full-name entries over MDFC front-face aliases (a genuine
+         distinct single-faced card must never be shadowed by an alias),
+      3. then "plainest standard paper printing": non-digital, black border,
+         not full-art/textless/oversized, no special frame treatment, not a
+         promo/variation, from a normal set, high-res scan available. These
+         only affect which image_uris/rarity get cached — legality, colour
+         identity, and oracle text don't vary by printing.
+    Fields like border_color/promo/set_type are inspected here only, never
+    stored (they're not in _KEEP_FIELDS).
+    """
+    frame_effects = set(card.get("frame_effects") or ())
+    return (
+        bool(card.get("type_line")),
+        direct,
+        not card.get("digital"),
+        card.get("border_color", "black") == "black",
+        not card.get("full_art"),
+        not card.get("textless"),
+        not card.get("oversized"),
+        not (frame_effects & _SPECIAL_FRAME_EFFECTS),
+        not card.get("promo"),
+        not card.get("variation"),
+        card.get("set_type") not in _SPECIAL_SET_TYPES,
+        bool(card.get("highres_image")),
+    )
+
+
 def _trim_bulk_cards(raw_cards: list[dict]) -> dict[str, dict]:
     """Trim a raw Scryfall default_cards list into the lookup dict we cache.
 
     Skips non-deck objects (_SKIP_LAYOUTS / _SKIP_SET_TYPES) so they can never
     claim a real card's name key — see the 2026-07-11 Pantlaza incident on the
-    constants above.
+    constants above. Among the printings that remain, the best-scoring one
+    wins the key (_printing_score: standard printing preferred, so hover/
+    commander images show the normal version, not an alt-art variant); ties
+    keep the first printing seen.
     """
     trimmed: dict[str, dict] = {}
+    scores: dict[str, tuple] = {}
 
-    def _put(key: str, entry: dict) -> None:
-        # First printing seen wins (legality/color-identity don't vary by
-        # printing) — except that an entry with no type_line never holds a key
-        # against one that has real card data. reversible_card printings
-        # (double-sided Secret Lair reprints, named "X // X" with all game
-        # data nested in card_faces and top-level type_line/oracle_text null)
-        # otherwise shadow the real card whenever the bulk file happens to
-        # list them first — confirmed 2026-07-11 on 13 live keys, including
-        # "Anointed Procession" and "Anje Falkenrath".
-        incumbent = trimmed.get(key)
-        if incumbent is None or (not incumbent.get("type_line") and entry.get("type_line")):
+    def _put(key: str, entry: dict, score: tuple) -> None:
+        # () compares below every real score, so the first candidate always
+        # lands; strict > keeps first-seen-wins on ties.
+        if score > scores.get(key, ()):
             trimmed[key] = entry
+            scores[key] = score
 
     for card in raw_cards:
         name = card.get("name", "").strip()
@@ -159,7 +207,7 @@ def _trim_bulk_cards(raw_cards: list[dict]) -> dict[str, dict]:
         if card.get("layout") in _SKIP_LAYOUTS or card.get("set_type") in _SKIP_SET_TYPES:
             continue
         entry = {f: card.get(f) for f in _KEEP_FIELDS}
-        _put(name.lower(), entry)
+        _put(name.lower(), entry, _printing_score(card, direct=True))
 
         # MDFCs (modal double-faced Sagas, transform creatures, etc.) get a
         # top-level `name` of "Front // Back" from Scryfall's bulk data — but
@@ -171,11 +219,12 @@ def _trim_bulk_cards(raw_cards: list[dict]) -> dict[str, dict]:
         # on the second because the repair agent happened to recall the exact
         # "// Fragment of Konda" suffix from training data — a lucky,
         # unverifiable guess in a headless run with no live Scryfall access,
-        # not a real fix). _put() keeps first-wins semantics here, so a
-        # genuine distinct single-faced card never gets silently shadowed by
-        # an MDFC's front-face alias.
+        # not a real fix). The alias is scored with direct=False, so a genuine
+        # distinct single-faced card never gets silently shadowed by an MDFC's
+        # front-face alias.
         if " // " in name:
-            _put(name.split(" // ", 1)[0].strip().lower(), entry)
+            _put(name.split(" // ", 1)[0].strip().lower(), entry,
+                 _printing_score(card, direct=False))
 
     return trimmed
 
@@ -339,6 +388,34 @@ def is_ramp_card(card: dict) -> bool:
     return any(p in oracle for p in _RAMP_EXTRA_LAND_PATTERNS)
 
 
+# Same pattern list as card_tagger._WIPE_PATTERNS (inlined — card_tagger
+# imports this module, so importing back would cycle). Crude by design,
+# tripwire not quota, exactly like is_ramp_card above.
+# All three sweeper idioms, not just black/white's (first firing of this
+# tripwire, run 13, 2026-07-17: the repair added Cyclonic Rift and Evacuation
+# from the staples list and the destroy-only patterns counted zero of them —
+# an unsatisfiable gate in Simic). destroy/exile = WB, "damage to each
+# creature" = red, "return all ..." = blue bounce.
+_WIPE_ORACLE_PATTERNS = (
+    "destroy all creatures", "each creature gets -", "exile all creatures",
+    "destroy all other creatures", "each player sacrifices",
+    "damage to each creature", "return all creatures",
+    "return all nontoken creatures", "return all nonland permanents",
+    "all creatures get -", "return each nonland permanent",
+)
+
+
+def is_wipe_card(card: dict) -> bool:
+    """True if this NONLAND card structurally reads as a board wipe. Added
+    2026-07-17 (Foundry run 12 review: "Zero sweepers is indefensible in
+    multiplayer EDH") — the wipes_min quota was prompt-only, which the local
+    drafters ignore; this makes it a validation tripwire like lands/ramp."""
+    if "land" in ((card.get("type_line") or "").lower()):
+        return False
+    oracle = oracle_text_of(card).lower()
+    return any(p in oracle for p in _WIPE_ORACLE_PATTERNS)
+
+
 @dataclass
 class ValidationResult:
     commander: str
@@ -365,6 +442,11 @@ class ValidationResult:
     min_ramp: int = 0              # floor requested by the caller; 0 = ramp check not requested
     too_few_ramp: bool = False
     ramp_target: int = 0
+    # Wipe tripwire (2026-07-17) — same design again.
+    wipe_count: int = 0
+    min_wipes: int = 0
+    too_few_wipes: bool = False
+    wipe_target: int = 0
 
     @property
     def is_valid(self) -> bool:
@@ -376,6 +458,7 @@ class ValidationResult:
             or self.wrong_card_count
             or self.too_few_lands
             or self.too_few_ramp
+            or self.too_few_wipes
         )
 
     def as_repair_notes(self) -> str:
@@ -409,6 +492,13 @@ class ValidationResult:
                 f"colors (e.g. Signets/Talismans, two-mana land-ramp sorceries) until the deck has "
                 f"at least {target} ramp sources. Do NOT cut lands to make room."
             )
+        if self.too_few_wipes:
+            target = max(self.wipe_target, self.min_wipes)
+            lines.append(
+                f"- Only {self.wipe_count} board wipe(s) — indefensible in multiplayer Commander. "
+                f"Swap the weakest nonland, non-ramp cards for mass removal in the commander's "
+                f"colors until the deck has at least {target} wipes. Do NOT cut lands or ramp."
+            )
         return "\n".join(lines)
 
 
@@ -421,7 +511,8 @@ def _is_singleton_exempt(card: dict) -> bool:
 
 def validate_deck(commander: str, decklist: list[str], cache: dict[str, dict] | None = None,
                   min_lands: int = 0, land_target: int = 0,
-                  min_ramp: int = 0, ramp_target: int = 0) -> ValidationResult:
+                  min_ramp: int = 0, ramp_target: int = 0,
+                  min_wipes: int = 0, wipe_target: int = 0) -> ValidationResult:
     """Validate a 99-card decklist against `commander`.
 
     Args:
@@ -445,7 +536,8 @@ def validate_deck(commander: str, decklist: list[str], cache: dict[str, dict] | 
     cache = cache if cache is not None else load_cache()
     result = ValidationResult(commander=commander, card_count=len(decklist) + 1,
                               min_lands=min_lands, land_target=land_target,
-                              min_ramp=min_ramp, ramp_target=ramp_target)
+                              min_ramp=min_ramp, ramp_target=ramp_target,
+                              min_wipes=min_wipes, wipe_target=wipe_target)
 
     commander_card = cache.get(commander.strip().lower())
     commander_identity = set(commander_card.get("color_identity", [])) if commander_card else set()
@@ -470,6 +562,8 @@ def validate_deck(commander: str, decklist: list[str], cache: dict[str, dict] | 
             result.land_count += 1
         elif is_ramp_card(card):
             result.ramp_count += 1
+        if is_wipe_card(card):
+            result.wipe_count += 1
 
         legality = (card.get("legalities") or {}).get("commander", "not_legal")
         if legality == "banned":
@@ -491,6 +585,8 @@ def validate_deck(commander: str, decklist: list[str], cache: dict[str, dict] | 
         result.too_few_lands = True
     if min_ramp > 0 and result.ramp_count < min_ramp:
         result.too_few_ramp = True
+    if min_wipes > 0 and result.wipe_count < min_wipes:
+        result.too_few_wipes = True
 
     return result
 

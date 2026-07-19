@@ -38,6 +38,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime
 
 import httpx
@@ -349,86 +350,109 @@ def _merge_results(
     return merged
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+def _copy_results(results: dict[str, dict]) -> dict[str, dict]:
+    """Per-card copy with fresh card dicts.
 
-@app.route("/")
-def index():
-    return render_template("index.html")
-
-
-@app.route("/api/health")
-def health():
-    """Lightweight liveness check for the hub status bar."""
-    return jsonify({"ok": True})
-
-
-@app.route("/api/autocomplete")
-def autocomplete():
-    """Card-name suggestions for the buy-list box (local Scryfall index).
-
-    Suggestions are a nicety: an empty list (too-short query, index still
-    warming up, or no match) is a normal 200, never an error.
+    _apply_delivery_fee mutates card dicts in place, so anything merged more
+    than once (progress polls re-merge the live sinks every poll; the final
+    merge runs on the same dicts the sinks hold) must work on copies or the
+    TCG Marketplace fee compounds. Card dicts are flat — a shallow dict() per
+    card is a full defensive copy.
     """
-    query = request.args.get("q", "")
-    return jsonify(card_index.search(query))
+    return {
+        name: {"cards": [dict(c) for c in v["cards"]], "errors": list(v["errors"])}
+        for name, v in results.items()
+    }
 
 
-@app.route("/search", methods=["POST"])
-def search():
-    body = request.get_json(force=True, silent=True) or {}
-    raw: list[str] = body.get("buy_list", [])
+# ── Progressive search jobs ───────────────────────────────────────────────────
+# The iOS app streams results in as each (card × store) lookup lands, with an
+# "N/M lookups done" bar. These jobs give the web UI the same behavior:
+# POST /search/start spawns a job thread and returns a job_id; the browser
+# polls GET /search/progress/<id>, which snapshots the two paths' partial
+# sinks, merges + formats them exactly like a finished search, and reports
+# completed/total lookup counts. POST /search still works (it runs a job
+# synchronously) so the hub and any old clients are unaffected.
 
-    # Engine rejects queries shorter than 3 chars — filter early.
-    buy_list = [s.strip() for s in raw if len(s.strip()) >= 3]
-    skipped  = [s.strip() for s in raw if 0 < len(s.strip()) < 3]
+class SearchJob:
+    def __init__(self, buy_list: list[str], skipped: list[str],
+                 budget_seconds: float | None = None):
+        self.id = uuid.uuid4().hex[:12]
+        self.buy_list = buy_list
+        self.skipped = skipped
+        # Wall-clock budget for this search. Callers doing bulk work (the
+        # collection pricer) pass a shorter one so a slow store (Agora) can't
+        # pin every batch at the full default; interactive searches omit it.
+        try:
+            self.budget = min(max(float(budget_seconds), 5.0), 120.0) \
+                if budget_seconds is not None else SEARCH_BUDGET_SECONDS
+        except (TypeError, ValueError):
+            self.budget = SEARCH_BUDGET_SECONDS
+        self.created = time.monotonic()
+        # One lock guards everything below: both sinks, both progress
+        # counters. Held only for dict writes/snapshot copies, never I/O.
+        self.lock = threading.Lock()
+        self.eng_partial: dict[str, dict] = {}   # card -> {"cards": [...], "errors": [...]}
+        self.eng_cards_done = 0
+        self.pw_partial: dict[str, dict] = {}
+        self.pw_progress: dict[str, int] = {}    # store -> cards completed
+        # One "unit" = one card × one store lookup, mirroring the iOS counter.
+        self.total_units = len(buy_list) * (len(ENGINE_STORES) + len(BINDERPOS_STORES))
+        self.done = False
+        self.result: dict | None = None          # final /search-shaped payload
+        self.status_code = 200
 
-    if not buy_list:
-        return jsonify({"error": "No valid card names supplied (minimum 3 characters each)."}), 400
+    def completed_units(self) -> int:
+        # Caller must hold self.lock. Engine progress is per card (one engine
+        # request covers all engine stores), so scale it to units.
+        return self.eng_cards_done * len(ENGINE_STORES) + sum(self.pw_progress.values())
 
+
+_jobs: dict[str, SearchJob] = {}
+_jobs_lock = threading.Lock()
+_JOB_TTL_SECONDS = 30 * 60
+
+
+def _register_job(job: SearchJob) -> None:
+    with _jobs_lock:
+        now = time.monotonic()
+        for jid in [j for j, v in _jobs.items() if now - v.created > _JOB_TTL_SECONDS]:
+            del _jobs[jid]
+        _jobs[job.id] = job
+
+
+def _run_search_job(job: SearchJob) -> None:
+    """Execute a search to completion, publishing partials into the job.
+
+    This is the old /search body, reshaped: the engine path now streams
+    per-card results into job.eng_partial (so an engine timeout salvages
+    finished cards instead of dropping the whole path, mirroring Playwright),
+    and the final payload lands in job.result instead of a jsonify().
+    """
+    buy_list = job.buy_list
     t0 = time.monotonic()
+    deadline = t0 + job.budget
 
-    # Card Kingdom reference price — pure local file read (state/ck_prices.json,
-    # refreshed nightly by refresh_ck_prices.py), no network call, negligible
-    # latency. None per-card if the cache is missing, stale (>48h), or has no
-    # listing for that name — /search never blocks on or fails because of this.
     ck_prices = ck_price.get_prices_for_buy_list(buy_list)
 
-    # Run Go engine (non-BinderPOS) and Playwright (BinderPOS) concurrently.
-    # The engine runs its own asyncio.run(); Playwright submits to its
-    # persistent background loop via run_async(). Both are submitted to a
-    # ThreadPoolExecutor so they overlap in wall-clock time.
-    #
-    # The two paths are collected INDEPENDENTLY. A timeout or crash in one
-    # must NOT discard the other's results: engine results (fast, reliable)
-    # should still render when the Playwright/BinderPOS path stalls on
-    # Cloudflare challenges or 429 rate-limiting (and vice-versa). A shared
-    # wall-clock deadline bounds the total request time; whichever future is
-    # still running when the deadline passes is abandoned (its background
-    # thread finishes harmlessly and its result is discarded).
+    def _on_engine_card(name: str, cards: list, errors: list) -> None:
+        with job.lock:
+            job.eng_partial[name] = {"cards": cards, "errors": errors}
+            job.eng_cards_done += 1
+
     def _run_engine():
         # Revive the engine if it died since the last search (see _ensure_engine_healthy).
         _ensure_engine_healthy()
-        return asyncio.run(search_many(buy_list, stores=ENGINE_STORES))
-
-    # Playwright publishes completed per-store results into pw_partial as it
-    # goes, so if it blows the wall-clock budget below we can still keep the
-    # stores/cards that finished instead of discarding the whole path. pw_lock
-    # guards the cross-thread read (Flask thread) vs writes (Playwright loop).
-    # pw_progress counts completed cards per store so a timeout can name the
-    # store(s) actually still running instead of blaming the whole path.
-    pw_partial: dict[str, dict] = {}
-    pw_progress: dict[str, int] = {}
-    pw_lock = threading.Lock()
+        return asyncio.run(search_many(buy_list, stores=ENGINE_STORES, on_card=_on_engine_card))
 
     def _run_playwright():
         return run_async(search_many_playwright(
-            buy_list, sink=pw_partial, sink_lock=pw_lock, progress=pw_progress,
+            buy_list, sink=job.pw_partial, sink_lock=job.lock, progress=job.pw_progress,
         ))
 
     engine_results: dict[str, dict] = {}
     playwright_results: dict[str, dict] = {}
     soft_errors: list[dict] = []
-    deadline = t0 + SEARCH_BUDGET_SECONDS
 
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
     try:
@@ -438,8 +462,13 @@ def search():
         try:
             engine_results = eng_future.result(timeout=max(0.1, deadline - time.monotonic()))
         except concurrent.futures.TimeoutError:
-            log.error("Engine search exceeded %.0fs budget — continuing without engine results", SEARCH_BUDGET_SECONDS)
-            soft_errors.append({"store": "engine", "error": f"timed out (>{SEARCH_BUDGET_SECONDS:.0f}s)"})
+            with job.lock:
+                engine_results = _copy_results(job.eng_partial)
+            log.error(
+                "Engine search exceeded %.0fs budget — keeping %d/%d finished cards",
+                job.budget, len(engine_results), len(buy_list),
+            )
+            soft_errors.append({"store": "engine", "error": f"timed out (>{job.budget:.0f}s); finished cards kept"})
         except Exception as exc:
             log.exception("Engine search failed: %s", exc)
             soft_errors.append({"store": "engine", "error": str(exc)})
@@ -448,14 +477,11 @@ def search():
             playwright_results = pw_future.result(timeout=max(0.1, deadline - time.monotonic()))
         except concurrent.futures.TimeoutError:
             # Don't discard the whole path — keep the stores/cards that finished.
-            # The coroutine keeps running on its loop; snapshot pw_partial (deep
+            # The coroutine keeps running on its loop; snapshot the sink (deep
             # enough that later appends can't mutate what we return) under the lock.
-            with pw_lock:
-                playwright_results = {
-                    name: {"cards": list(v["cards"]), "errors": list(v["errors"])}
-                    for name, v in pw_partial.items()
-                }
-                progress_snapshot = dict(pw_progress)
+            with job.lock:
+                playwright_results = _copy_results(job.pw_partial)
+                progress_snapshot = dict(job.pw_progress)
             got = sum(1 for v in playwright_results.values() if v["cards"] or v["errors"])
             # Name the store(s) actually still running at the deadline — eleven
             # finished stores shouldn't share the blame for one slow one.
@@ -467,17 +493,17 @@ def search():
             pending_note = f"; still scraping: {', '.join(pending)}" if pending else ""
             log.error(
                 "Playwright search exceeded %.0fs budget — keeping partial results (%d/%d cards had data)%s",
-                SEARCH_BUDGET_SECONDS, got, len(buy_list), pending_note,
+                job.budget, got, len(buy_list), pending_note,
             )
             soft_errors.append({
                 "store": pending[0].split(" (")[0] if len(pending) == 1 else "Playwright stores",
-                "error": f"search budget hit ({SEARCH_BUDGET_SECONDS:.0f}s); finished stores kept{pending_note}",
+                "error": f"search budget hit ({job.budget:.0f}s); finished stores kept{pending_note}",
             })
         except Exception as exc:
             log.exception("Playwright search failed: %s", exc)
             soft_errors.append({"store": "Playwright (BinderPOS)", "error": str(exc)})
     finally:
-        # wait=False so we never block the response on a future that's still
+        # wait=False so we never block completion on a future that's still
         # stuck (e.g. Playwright on a Cloudflare interstitial).
         pool.shutdown(wait=False)
 
@@ -485,10 +511,17 @@ def search():
     # whatever succeeded and surface the failure as a store error chip.
     if not engine_results and not playwright_results:
         log.error("Search failed: both engine and Playwright returned no data")
-        return jsonify({"error": "Search failed — no data from engine or Playwright. Check server logs."}), 500
+        job.result = {"error": "Search failed — no data from engine or Playwright. Check server logs."}
+        job.status_code = 500
+        job.done = True
+        return
 
     elapsed = round(time.monotonic() - t0, 1)
-    results_by_card = _merge_results(engine_results, playwright_results, buy_list)
+    # Copy before merging: the full results share card dicts with the live
+    # sinks, and _apply_delivery_fee mutates in place (see _copy_results).
+    results_by_card = _merge_results(
+        _copy_results(engine_results), _copy_results(playwright_results), buy_list,
+    )
     rows = format_results(results_by_card, buy_list)
 
     # Local price history: snapshot today's cheapest per (card, store), then
@@ -518,15 +551,133 @@ def search():
             seen_stores.add(store)
             store_errors.append(serr)
 
-    return jsonify({
+    job.result = {
         "results":      rows,
         "elapsed":      elapsed,
         "store_errors": store_errors,
-        "skipped":      skipped,
+        "skipped":      job.skipped,
         "ck_prices":    ck_prices,
         "card_art":     art,
         "history":      history,
         "watched":      {e["card"].lower(): e["target_sgd"] for e in watchlist.list_entries()},
+    }
+    job.done = True
+
+
+def _run_search_job_safely(job: SearchJob) -> None:
+    """Thread target: a crash must still mark the job done, or the UI polls forever."""
+    try:
+        _run_search_job(job)
+    except Exception as exc:
+        log.exception("Search job %s crashed: %s", job.id, exc)
+        job.result = {"error": f"Search crashed: {exc}"}
+        job.status_code = 500
+        job.done = True
+
+
+def _parse_buy_list(raw: list[str]) -> tuple[list[str], list[str]]:
+    """Engine rejects queries shorter than 3 chars — filter early."""
+    buy_list = [s.strip() for s in raw if len(s.strip()) >= 3]
+    skipped  = [s.strip() for s in raw if 0 < len(s.strip()) < 3]
+    return buy_list, skipped
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/api/health")
+def health():
+    """Lightweight liveness check for the hub status bar."""
+    return jsonify({"ok": True})
+
+
+@app.route("/api/autocomplete")
+def autocomplete():
+    """Card-name suggestions for the buy-list box (local Scryfall index).
+
+    Suggestions are a nicety: an empty list (too-short query, index still
+    warming up, or no match) is a normal 200, never an error.
+    """
+    query = request.args.get("q", "")
+    return jsonify(card_index.search(query))
+
+
+@app.route("/search", methods=["POST"])
+def search():
+    """Blocking search — runs a job synchronously. Kept for old clients (hub,
+    scripts); the web UI uses /search/start + /search/progress for live
+    progress and streamed-in results."""
+    body = request.get_json(force=True, silent=True) or {}
+    buy_list, skipped = _parse_buy_list(body.get("buy_list", []))
+
+    if not buy_list:
+        return jsonify({"error": "No valid card names supplied (minimum 3 characters each)."}), 400
+
+    job = SearchJob(buy_list, skipped, budget_seconds=body.get("budget_seconds"))
+    _register_job(job)
+    _run_search_job_safely(job)
+    return jsonify(job.result), job.status_code
+
+
+@app.route("/search/start", methods=["POST"])
+def search_start():
+    """Kick off a progressive search; the browser polls /search/progress/<id>.
+
+    ck_prices and card_art are returned up front (both are pure local reads)
+    so partially rendered result groups already have their thumbnail and CK
+    reference while stores are still being scraped.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    buy_list, skipped = _parse_buy_list(body.get("buy_list", []))
+
+    if not buy_list:
+        return jsonify({"error": "No valid card names supplied (minimum 3 characters each)."}), 400
+
+    job = SearchJob(buy_list, skipped, budget_seconds=body.get("budget_seconds"))
+    _register_job(job)
+    threading.Thread(target=_run_search_job_safely, args=(job,), daemon=True,
+                     name=f"search-{job.id}").start()
+    return jsonify({
+        "job_id":      job.id,
+        "total_units": job.total_units,
+        "skipped":     skipped,
+        "ck_prices":   ck_price.get_prices_for_buy_list(buy_list),
+        "card_art":    card_art.get_for_names(buy_list),
+    })
+
+
+@app.route("/search/progress/<job_id>")
+def search_progress(job_id: str):
+    """Poll a progressive search: lookup counts + partial rows, final payload when done."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        return jsonify({"error": "unknown or expired search job"}), 404
+
+    if job.done:
+        payload = dict(job.result or {})
+        payload.update({
+            "done": True,
+            "completed_units": job.total_units,
+            "total_units": job.total_units,
+        })
+        return jsonify(payload), job.status_code
+
+    with job.lock:
+        eng = _copy_results(job.eng_partial)
+        pw  = _copy_results(job.pw_partial)
+        completed = job.completed_units()
+
+    rows = format_results(_merge_results(eng, pw, job.buy_list), job.buy_list)
+    return jsonify({
+        "done":            False,
+        "completed_units": completed,
+        "total_units":     job.total_units,
+        "results":         rows,
     })
 
 

@@ -1,15 +1,15 @@
 #!/bin/bash
-# Double-click launcher for The Deckwright's Atelier (native desktop window).
+# Double-click launcher for The Foundry (native desktop window).
 # Safe to move this file anywhere (Desktop, Dock, Applications) — the project
 # path below is absolute, so it always finds the app.
 
-cd "/Users/trevorjow/Desktop/Cowork Playground/Local Gishath Fetch/gishath-local-v2" || {
-  echo "Could not find the gishath-local-v2 project folder."
+cd "/Users/trevorjow/Desktop/Cowork Playground/Local Gishath Fetch/gishath-local-lmstudio" || {
+  echo "Could not find the gishath-local-lmstudio project folder."
   read -p "Press Return to close this window..."
   exit 1
 }
 
-echo "Starting The Deckwright's Atelier..."
+echo "Starting The Foundry..."
 echo ""
 source venv/bin/activate
 python -m atelier.desktop
